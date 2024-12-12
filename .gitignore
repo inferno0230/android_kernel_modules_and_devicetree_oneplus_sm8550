@@ -1,0 +1,14 @@
+.repo/
+LOGDIR/
+device/
+exports.txt
+kernel_platform/build.config
+kernel_platform/build/bazel_common_rules/
+kernel_platform/common/
+kernel_platform/external/
+kernel_platform/msm-kernel/
+kernel_platform/out/
+kernel_platform/prebuilts/
+kernel_platform/tools/mkbootimg/
+kernel_platform/vendor/
+out/
