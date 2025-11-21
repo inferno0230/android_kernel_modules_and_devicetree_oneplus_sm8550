@@ -34,6 +34,9 @@
 #include <linux/vmstat.h>
 
 #include "../../../mm/internal.h"
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_OSVELTE)
+#include "../../mm_osvelte/mm-config.h"
+#endif /* CONFIG_OPLUS_FEATURE_MM_OSVELTE */
 
 #define SHRINK_LRUVECD_HIGH (0x1000)  //16Mbytes
 
@@ -288,6 +291,15 @@ static int __init kshrink_lruvec_init(void)
 	pg_data_t *pgdat = NODE_DATA(0);
 	int ret;
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_OSVELTE)
+	struct config_ezreclaimd *config_ezr;
+
+	config_ezr = oplus_read_mm_config(module_name_ezreclaimd);
+	if (config_ezr && config_ezr->enable) {
+		pr_info("%s is disabled by EZR\n", __func__);
+		return 0;
+	}
+#endif /* CONFIG_OPLUS_FEATURE_MM_OSVELTE */
 	register_trace_android_vh_handle_failed_page_trylock(handle_failed_page_trylock, NULL);
 	register_trace_android_vh_page_trylock_set(page_trylock_set, NULL);
 	register_trace_android_vh_page_trylock_clear(page_trylock_clear, NULL);

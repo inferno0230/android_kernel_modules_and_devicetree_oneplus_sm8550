@@ -3670,12 +3670,12 @@ static void fts_get_rawdata_snr(struct chip_data_ft3681 *ts_data)
 	ts_data->snr_data_is_ready = 0;
 }
 
-static void fts_tp_limit_data_write(void *chip_data, int count)
+static void fts_tp_data_record_write(void *chip_data, int count)
 {
 	struct chip_data_ft3681 *ts_data = (struct chip_data_ft3681 *)chip_data;
 	int ret = 0;
 
-	TPD_INFO("%s fts_tp_limit_data_write:%d \n", __func__, count);
+	TPD_INFO("%s fts_tp_data_record_write:%d \n", __func__, count);
 	if (!ts_data->tp_data_record_support) {
 		TPD_INFO("data record not support! \n");
 		return;
@@ -4209,7 +4209,7 @@ static struct debug_info_proc_operations fts_debug_info_proc_ops = {
 	.main_register_read = fts_main_register_read,
 /*	.self_delta_read   = fts_self_delta_read,  */
 	.delta_snr_read    = fts_delta_snr_read,
-	.tp_limit_data_write    = fts_tp_limit_data_write,
+	.tp_data_record_write    = fts_tp_data_record_write,
 };
 
 struct focal_debug_func focal_debug_ops = {

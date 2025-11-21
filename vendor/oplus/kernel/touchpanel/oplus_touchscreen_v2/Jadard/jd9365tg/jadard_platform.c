@@ -890,6 +890,14 @@ int jadard_chip_common_probe(struct spi_device *spi)
     pjadard_ts_data = ts;
     spi->bits_per_word = 8;
     spi->mode = SPI_MODE_0;
+    spi->chip_select = 0;
+    JD_I("SPI CLOCK SET\n");
+    spi->cs_setup.value = 1;
+    spi->cs_setup.unit = 0;
+    spi->cs_hold.value = 1;
+    spi->cs_hold.unit = 0;
+    spi->cs_inactive.value = 1;
+    spi->cs_inactive.unit = 0;
     /* Maybe config chip_select on Kasan system when read ICID 0000 */
     /* spi->chip_select = 0; */
 

@@ -5,7 +5,7 @@
 
 #include <linux/proc_fs.h>
 
-#include "common.h"
+#include "internal.h"
 #include "memstat.h"
 #include "sys-memstat.h"
 

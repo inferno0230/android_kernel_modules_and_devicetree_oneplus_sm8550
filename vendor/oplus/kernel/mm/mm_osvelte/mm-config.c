@@ -11,9 +11,12 @@
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 
-#include "common.h"
+#include "internal.h"
 #include "sys-memstat.h"
 #include "mm-config.h"
+
+#define MAX_CMDLINE_PARAM_LEN 128
+char feature_disable1[MAX_CMDLINE_PARAM_LEN];
 
 #define MEM_1GB (1 << (30 - PAGE_SHIFT))
 #define MEM_2GB (2 << (30 - PAGE_SHIFT))
@@ -43,6 +46,7 @@ struct config_data {
 	struct list_head list;
 	void (*seq_show)(struct seq_file *m, struct config_data *cd);
 };
+unsigned long cmdline_mm_reserved_1;
 
 static LIST_HEAD(config_list);
 static int read_ram_gb(void)
@@ -206,10 +210,145 @@ put_node:
 	of_node_put(node);
 }
 
+static void config_ezreclaimd_show(struct seq_file *m, struct config_data *cd)
+{
+	struct config_ezreclaimd *config = (struct config_ezreclaimd *)cd->private;
+
+	seq_printf(m, "[%s]\n", cd->module_name);
+	seq_printf(m, "  enable: %d\n",
+		   config->enable);
+}
+
+static void parse_ezreclaimd_dt(const struct device_node *root)
+{
+	struct config_ezreclaimd *config;
+	struct config_data *data;
+	struct device_node *node;
+	const char *name = module_name_ezreclaimd;
+
+	node = of_get_child_by_name(root, name);
+	if (!node)
+		return;
+
+	config = kzalloc(sizeof(*config), GFP_KERNEL);
+	if (!config) {
+		osvelte_loge("failed to allocate\n");
+		goto put_node;
+	}
+
+	if (oplus_test_mm_feature_disable(COMFD1_EZRECLAIMD))
+		osvelte_logi("ezreclaimd disabled by cmdline\n");
+	else
+		config->enable = of_property_read_bool(node, "feature-enable");
+
+	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	if (!data) {
+		osvelte_loge("failed to allocate config data\n");
+		kfree(config);
+		goto put_node;
+	}
+
+	data->module_name = name;
+	INIT_LIST_HEAD(&data->list);
+	data->private = config;
+	data->seq_show = config_ezreclaimd_show;
+	list_add_tail(&data->list, &config_list);
+put_node:
+	of_node_put(node);
+}
+
+static void config_kcompressed_show(struct seq_file *m, struct config_data *cd)
+{
+	struct config_kcompressed *config = (struct config_kcompressed *)cd->private;
+
+	seq_printf(m, "[%s]\n", cd->module_name);
+	seq_printf(m, "  enable: %d\n",
+		   config->enable);
+}
+
+static void parse_kcompressed_dt(const struct device_node *root)
+{
+	struct config_kcompressed *config;
+	struct config_data *data;
+	struct device_node *node;
+	const char *name = module_name_kcompressed;
+
+	node = of_get_child_by_name(root, name);
+	if (!node)
+		return;
+
+	config = kzalloc(sizeof(*config), GFP_KERNEL);
+	if (!config) {
+		osvelte_loge("failed to allocate\n");
+		goto put_node;
+	}
+	config->enable = of_property_read_bool(node, "feature-enable");
+
+	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	if (!data) {
+		osvelte_loge("failed to allocate config data\n");
+		kfree(config);
+		goto put_node;
+	}
+
+	data->module_name = name;
+	INIT_LIST_HEAD(&data->list);
+	data->private = config;
+	data->seq_show = config_kcompressed_show;
+	list_add_tail(&data->list, &config_list);
+put_node:
+	of_node_put(node);
+}
+
+static void config_mglru_opt_show(struct seq_file *m, struct config_data *cd)
+{
+	struct config_oplus_bsp_mglru_opt *config = (struct config_oplus_bsp_mglru_opt *)cd->private;
+
+	seq_printf(m, "[%s]\n", cd->module_name);
+	seq_printf(m, "  enable: %d\n", config->enable);
+}
+
+static void parse_mglru_opt_dt(const struct device_node *root)
+{
+	struct config_oplus_bsp_mglru_opt *config;
+	struct config_data *data;
+	struct device_node *node;
+	const char *name = module_name_mglru_opt;
+
+	node = of_get_child_by_name(root, name);
+	if (!node)
+		return;
+
+	config = kzalloc(sizeof(*config), GFP_KERNEL);
+	if (!config) {
+		osvelte_loge("failed to allocate\n");
+		goto put_node;
+	}
+
+	config->enable = of_property_read_bool(node, "feature-enable");
+
+	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	if (!data) {
+		osvelte_loge("failed to allocate config data\n");
+		kfree(config);
+		goto put_node;
+	}
+
+	data->module_name = name;
+	INIT_LIST_HEAD(&data->list);
+	data->private = config;
+	data->seq_show = config_mglru_opt_show;
+	list_add_tail(&data->list, &config_list);
+put_node:
+	of_node_put(node);
+}
+
+
 static int config_list_show(struct seq_file *m, void *data)
 {
 	/* module is initialized at boot stage, so no need lock to protect. */
 	struct config_data *cd;
+	seq_printf(m, "cmdline: %lx\n", cmdline_mm_reserved_1);
 
 	list_for_each_entry(cd, &config_list, list)
 		cd->seq_show(m, cd);
@@ -243,6 +382,9 @@ static int parse_mm_config_dt(const struct platform_device *pdev)
 	parse_boost_pool_dt(child);
 	parse_uxmem_opt_dt(child);
 	parse_zram_opt_dt(child);
+	parse_ezreclaimd_dt(child);
+	parse_kcompressed_dt(child);
+	parse_mglru_opt_dt(child);
 	of_node_put(child);
 	return 0;
 }
@@ -261,6 +403,12 @@ void *oplus_read_mm_config(const char *module_name)
 	return NULL;
 }
 EXPORT_SYMBOL_GPL(oplus_read_mm_config);
+
+bool oplus_test_mm_feature_disable(unsigned long nr)
+{
+	return (1ul << nr) & cmdline_mm_reserved_1;
+}
+EXPORT_SYMBOL_GPL(oplus_test_mm_feature_disable);
 
 static int mm_config_probe(struct platform_device *pdev)
 {
@@ -287,6 +435,13 @@ int mm_config_init(struct proc_dir_entry *root)
 {
 	int ret;
 
+	osvelte_logi("cmdline %s\n", feature_disable1);
+	/* parse cmdline result */
+	if (feature_disable1[0] != 0 &&
+	    !kstrtoul(feature_disable1, 16, &cmdline_mm_reserved_1)) {
+		osvelte_logi("mm_reserved_1: 0x%lx\n", cmdline_mm_reserved_1);
+	}
+
 	ret = platform_driver_register(&mm_config_driver);
 	if (ret < 0) {
 		osvelte_loge("failed to register\n");
@@ -303,3 +458,4 @@ int mm_config_exit(void)
 	platform_driver_unregister(&mm_config_driver);
 	return 0;
 }
+module_param_string(feature_disable1, feature_disable1, MAX_CMDLINE_PARAM_LEN, 0600);

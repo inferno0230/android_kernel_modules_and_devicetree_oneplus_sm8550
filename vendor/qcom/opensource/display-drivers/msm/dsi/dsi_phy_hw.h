@@ -29,13 +29,22 @@
 
 #ifdef OPLUS_FEATURE_DISPLAY
 #undef DSI_PHY_ERR
-#include <soc/oplus/system/oplus_mm_kevent_fb.h>
+#ifdef OPLUS_TRACKPOINT_REPORT
+#include <soc/oplus/oplus_trackpoint_report.h>
+#define DSI_PHY_ERR(p, fmt, ...) \
+		do { \
+			DRM_DEV_ERROR(NULL, "[msm-dsi-error]: DSI_%d: "\
+					fmt, p ? p->index : -1, ##__VA_ARGS__); \
+			display_exception_trackpoint_report("DisplayDriverID@@%d$$" pr_fmt(fmt), \
+				OPLUS_DISP_Q_ERROR_PHY_HW, ##__VA_ARGS__); \
+		} while(0)
+#else
 #define DSI_PHY_ERR(p, fmt, ...) \
 	do { \
 		DRM_DEV_ERROR(NULL, "[msm-dsi-error]: DSI_%d: "\
 				fmt, p ? p->index : -1, ##__VA_ARGS__); \
-		mm_fb_display_kevent_named(MM_FB_KEY_RATELIMIT_1H, fmt, ##__VA_ARGS__); \
 	} while(0)
+#endif /* OPLUS_TRACKPOINT_REPORT */
 #endif /* OPLUS_FEATURE_DISPLAY */
 
 /**

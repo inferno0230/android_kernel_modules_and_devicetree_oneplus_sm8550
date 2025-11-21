@@ -438,13 +438,14 @@ static void set_sched_boost(struct task_struct *p, bool enable)
 	int ux_state = oplus_get_ux_state(p);
 
 	if (enable) {
+		/* If the task is already a inherit ux task, we unset it to avoid canceling audio ux when inherit ux is canceled. */
 		if (oplus_get_inherit_ux(p)) {
 			clear_all_inherit_type(p);
 			ux_state = 0;
 		}
-		oplus_set_ux_state_lock(p, (ux_state | UX_PRIORITY_AUDIO | SA_TYPE_SWIFT), true);
+		oplus_set_ux_state_lock(p, (ux_state | UX_PRIORITY_AUDIO | SA_TYPE_SWIFT), -1, true);
 	} else {
-		oplus_set_ux_state_lock(p, (ux_state & ~(SCHED_ASSIST_UX_PRIORITY_MASK | SA_TYPE_SWIFT)), true);
+		oplus_set_ux_state_lock(p, (ux_state & ~(SCHED_ASSIST_UX_PRIORITY_MASK | SA_TYPE_SWIFT)), -1, true);
 	}
 #if IS_ENABLED(CONFIG_SCHED_WALT)
 	if (!is_task_util_over(p, sa_audio_threshold_util))
@@ -484,7 +485,7 @@ void oplus_sched_assist_audio_perf_addIm(struct task_struct *task, int im_flag)
 
 	if (is_audio_task(task) && im_flag == (IM_FLAG_AUDIO + IM_FLAG_CLEAR))
 		set_sched_boost(task, false);
-	else if (im_flag == IM_FLAG_AUDIO) /* if the task is already a ux task, we can't set it to audio task */
+	else if (im_flag == IM_FLAG_AUDIO)
 		set_sched_boost(task, true);
 }
 
@@ -569,7 +570,7 @@ bool oplus_sched_assist_audio_idle_balance(struct rq *this_rq)
 		 */
 		p = pick_highest_pushable_task(src_rq, this_cpu);
 
-		if (!p)
+		if (!p || !cpumask_test_cpu(this_cpu, p->cpus_ptr))
 			goto skip;
 
 		/* we only allow audio-app group task (util must < sa_audio_threshold_util) doing this work */

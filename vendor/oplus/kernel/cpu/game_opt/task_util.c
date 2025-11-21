@@ -24,7 +24,7 @@ struct task_runtime_info {
 } child_threads[MAX_TID_COUNT];
 
 static struct task_struct *game_leader = NULL;
-static pid_t game_pid = -1;
+pid_t game_pid = -1;
 static int child_num;
 static u64 window_start;
 

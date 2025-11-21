@@ -4,5 +4,7 @@
  */
 #ifdef CONFIG_OPLUS_FEATURE_MULTI_FBG
 #include "./multi_rtg/frame_boost_trace.h"
+#else
+#include "./frame_boost_V1/frame_boost_trace.h"
 #endif
 

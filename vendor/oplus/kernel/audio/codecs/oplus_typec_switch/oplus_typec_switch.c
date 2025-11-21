@@ -164,6 +164,37 @@ static const struct typec_switch_reg_val dio4483_i2c_reg[] = {
 	//*/
 };
 
+static const struct typec_switch_reg_val dio4485_i2c_reg[] = {
+	{DIO4485_REG_SWITCH_SELECT, 0x18},
+	/* v1.2 s1~s5 do not set these reg
+	{DIO4483_REG_SLOW_L, 0x00},
+	{DIO4483_REG_SLOW_R, 0x00},
+	{DIO4483_REG_SLOW_MIC, 0x00},
+	{DIO4483_REG_SLOW_SENSE, 0x00},
+	{DIO4483_REG_SLOW_GND, 0x00},
+	{DIO4483_REG_DELAY_L_R, 0x2f},
+	{DIO4483_REG_DELAY_L_MIC, 0x1f},
+	{DIO4483_REG_DELAY_L_SENSE, 0x00},
+	{DIO4483_REG_DELAY_L_AGND, 0x09},
+	*/
+	{DIO4485_REG_SWITCH_SETTINGS, 0x98},
+	{DIO4485_REG_FUN_EN, 0x00},
+	{DIO4485_REG_TIMING_DELAY, 0x2f},
+	///* v1.4 s9
+	{0x1c, 0x2a},
+	{0x1f, 0x0f},
+	{0x2e, 0x8f},
+	{0x2f, 0x45},
+	{0x2e, 0x72},
+	{0x0f, 0x00},
+	{0x10, 0x00},
+	{0x0e, 0x0b},
+	{0x0d, 0x0f},
+	{0x21, 0x0f},
+	{0x12, 0x10},
+	//*/
+};
+
 static const struct typec_switch_reg_val default_i2c_reg[] = {
 	{DEFAULT_REG_SWITCH_SELECT, 0x18},
 	{DEFAULT_REG_SLOW_L, 0x00},
@@ -267,6 +298,10 @@ static void typec_switch_usbc_update_settings(struct typec_switch_priv *switch_p
 		return;
 	}
 
+	if (switch_priv->vendor == DIO4485) {
+		return;
+	}
+
 	if (switch_priv->vendor == WAS4783) {
 		return;
 	}
@@ -305,7 +340,7 @@ int typec_switch_to_fast_charger(int to_fast_charger)
 		return -EINVAL;
 	}
 
-	if (switch_priv->vendor != DIO4483 && switch_priv->vendor != WAS4783) {
+	if (switch_priv->vendor != DIO4483 && switch_priv->vendor != DIO4485 && switch_priv->vendor != WAS4783 && switch_priv->vendor != HL5281) {
 		dev_err(dev, "%s, %d, current chip 0x%02x, is not supported!", __func__, __LINE__, switch_priv->vendor);
 
 		return -EINVAL;
@@ -321,6 +356,10 @@ int typec_switch_to_fast_charger(int to_fast_charger)
 		regmap_read(switch_priv->regmap, DIO4483_REG_SWITCH_STATUS0, &reg_val);
 		dn_l_status = GET_BITS(reg_val, DIO4483_SWITCH_STATUS0_DN_L_SWITCH_STATUS_L, width);
 		dp_r_status = GET_BITS(reg_val, DIO4483_SWITCH_STATUS0_DP_R_SWITCH_STATUS_L, width);
+	} else if (switch_priv->vendor == DIO4485){
+		regmap_read(switch_priv->regmap, DIO4485_REG_SWITCH_STATUS0, &reg_val);
+		dn_l_status = GET_BITS(reg_val, DIO4485_SWITCH_STATUS0_DN_L_SWITCH_STATUS_L, width);
+		dp_r_status = GET_BITS(reg_val, DIO4485_SWITCH_STATUS0_DP_R_SWITCH_STATUS_L, width);
 	} else {
 		regmap_read(switch_priv->regmap, DEFAULT_REG_SWITCH_STATUS0, &reg_val);
 		dn_l_status = GET_BITS(reg_val, DEFAULT_SWITCH_STATUS0_DN_L_SWITCH_STATUS_L, width);
@@ -345,6 +384,21 @@ int typec_switch_to_fast_charger(int to_fast_charger)
 			SET_BIT(reg_val, DIO4483_SWITCH_SETTINGS_DN_L_TO_DN_or_L);
 			SET_BIT(reg_val, DIO4483_SWITCH_SETTINGS_DN_R_TO_DP_or_R);
 			dev_info(dev, "%s, %d, write 0x%02x = 0x%02x", __func__, __LINE__, DIO4483_REG_SWITCH_SETTINGS, reg_val);
+			ret |= typec_switch_write_register(switch_priv->regmap, DIO4483_REG_SWITCH_SETTINGS, reg_val);
+			usleep_range(10000, 10005);
+
+			dev_info(dev, "%s, %d, charger plugin. set to switch mode", __func__, __LINE__);
+		} else if (switch_priv->vendor == DIO4485) {
+			reg_val = 0;
+			SET_BIT(reg_val, DIO4485_SWITCH_SELECT_USB2_SWITCH);
+			dev_info(dev, "%s, %d, write 0x%02x = 0x%02x", __func__, __LINE__, DIO4485_REG_SWITCH_SELECT, reg_val);
+			ret |= typec_switch_write_register(switch_priv->regmap, DIO4485_REG_SWITCH_SELECT, reg_val);
+
+			reg_val = 0;
+			SET_BIT(reg_val, DIO4485_SWITCH_SETTINGS_DEVICE_ENABLE);
+			SET_BIT(reg_val, DIO4485_SWITCH_SETTINGS_DN_L_TO_DN_or_L);
+			SET_BIT(reg_val, DIO4485_SWITCH_SETTINGS_DN_R_TO_DP_or_R);
+			dev_info(dev, "%s, %d, write 0x%02x = 0x%02x", __func__, __LINE__, DIO4485_REG_SWITCH_SETTINGS, reg_val);
 			ret |= typec_switch_write_register(switch_priv->regmap, DIO4483_REG_SWITCH_SETTINGS, reg_val);
 			usleep_range(10000, 10005);
 
@@ -380,6 +434,22 @@ int typec_switch_to_fast_charger(int to_fast_charger)
 
 			dev_info(dev, "%s, %d, write 0x%02x = 0x%02x", __func__, __LINE__, DIO4483_REG_SWITCH_SETTINGS, reg_val);
 			ret |= typec_switch_write_register(switch_priv->regmap, DIO4483_REG_SWITCH_SETTINGS, reg_val);
+
+			dev_info(dev, "%s, %d, charger plugout. set to usb mode", __func__, __LINE__);
+		} else if (switch_priv->vendor == DIO4485) {
+			reg_val = 0;
+			SET_BIT(reg_val, DIO4485_SWITCH_SELECT_DN_L_TO_DN_or_L);
+			SET_BIT(reg_val, DIO4485_SWITCH_SELECT_DN_R_TO_DP_or_R);
+			dev_info(dev, "%s, %d, write 0x%02x = 0x%02x", __func__, __LINE__, DIO4485_REG_SWITCH_SELECT, reg_val);
+			ret |= typec_switch_write_register(switch_priv->regmap, DIO4485_REG_SWITCH_SELECT, reg_val);
+
+			reg_val = 0;
+			SET_BIT(reg_val, DIO4485_SWITCH_SETTINGS_DEVICE_ENABLE);
+			SET_BIT(reg_val, DIO4485_SWITCH_SETTINGS_DN_L_TO_DN_or_L);
+			SET_BIT(reg_val, DIO4485_SWITCH_SETTINGS_DN_R_TO_DP_or_R);
+
+			dev_info(dev, "%s, %d, write 0x%02x = 0x%02x", __func__, __LINE__, DIO4485_REG_SWITCH_SETTINGS, reg_val);
+			ret |= typec_switch_write_register(switch_priv->regmap, DIO4485_REG_SWITCH_SETTINGS, reg_val);
 
 			dev_info(dev, "%s, %d, charger plugout. set to usb mode", __func__, __LINE__);
 		} else {//WAS4783
@@ -462,6 +532,11 @@ int typec_switch_status0(void)
 		reg_status = DIO4483_REG_SWITCH_STATUS0;
 		reg_l_shift = DIO4483_SWITCH_STATUS0_DN_L_SWITCH_STATUS_L;
 		reg_r_shift = DIO4483_SWITCH_STATUS0_DP_R_SWITCH_STATUS_L;
+	} else if (switch_priv->vendor == DIO4485) {
+		reg_status1 = DIO4485_REG_SWITCH_STATUS1;
+		reg_status = DIO4485_REG_SWITCH_STATUS0;
+		reg_l_shift = DIO4485_SWITCH_STATUS0_DN_L_SWITCH_STATUS_L;
+		reg_r_shift = DIO4485_SWITCH_STATUS0_DP_R_SWITCH_STATUS_L;
 	} else {
 		reg_status1 = DEFAULT_REG_SWITCH_STATUS1;
 		reg_status = DEFAULT_REG_SWITCH_STATUS0;
@@ -735,6 +810,38 @@ static int typec_switch_usbc_analog_setup_switches(struct typec_switch_priv *swi
 			regmap_read(switch_priv->regmap, DIO4483_REG_JACK_STATUS, &reg_val);
 			dev_info(dev, "v1.4 s9 %s, %d, read 0x%02x = 0x%02x", __func__, __LINE__, DIO4483_REG_JACK_STATUS, reg_val);
 			typec_switch_status = 0;
+		} else if (switch_priv->vendor == DIO4485) {
+			/* activate switches */
+			/* reg_val = 0; */
+			/* SET_BIT(reg_val, DIO4485_I2C_RESET); */
+			/* dev_info(dev, "%s, %d, write 0x%02x = 0x%02x", __func__, __LINE__, DIO4485_REG_FUN_EN, reg_val); */
+
+			/* ret = typec_switch_write_register(switch_priv->regmap, DIO4485_REG_RESET, reg_val); // reset DIO4485 */
+			/* usleep_range(1000, 1005); */
+
+			/* reg_val = 0x40; // 4.6V */
+			/* SET_BIT(reg_val, DIO4485_FUNCTION_MIC_AUTO_TURN_OUT); */
+			/* SET_BIT(reg_val, DIO4485_FUNCTION_AUDIO_JACK_DECTION); */
+			reg_val = 0x19;
+			dev_info(dev, "%s, %d, write 0x%02x = 0x%02x", __func__, __LINE__, DIO4485_REG_FUN_EN, reg_val);
+			ret = typec_switch_write_register(switch_priv->regmap, DIO4485_REG_FUN_EN, reg_val);
+
+			for (i = 0;i < 100 ;i++) {
+				usleep_range(10*1000, 10*1005);
+				regmap_read(switch_priv->regmap, DIO4485_REG_DETECTION_FLAG, &reg_val);
+				if (GET_BIT(reg_val, DIO4485_DETECTION_FLAG_AUDIO_JACK_DETECTION_CONFIGURATION_OCCURRED)) {
+					dev_info(dev, "%s: Audio jack detection and configuration has occurred.\n", __func__);
+
+					break;
+				}
+			}
+			regmap_read(switch_priv->regmap, DIO4485_REG_SWITCH_STATUS0, &reg_val);
+			dev_info(dev, "v1.4 s9 %s, %d, read 0x%02x = 0x%02x", __func__, __LINE__, DIO4485_REG_SWITCH_STATUS0, reg_val);
+			regmap_read(switch_priv->regmap, DIO4485_REG_SWITCH_STATUS1, &reg_val);
+			dev_info(dev, "v1.4 s9 %s, %d, read 0x%02x = 0x%02x", __func__, __LINE__, DIO4485_REG_SWITCH_STATUS1, reg_val);
+			regmap_read(switch_priv->regmap, DIO4485_REG_JACK_STATUS, &reg_val);
+			dev_info(dev, "v1.4 s9 %s, %d, read 0x%02x = 0x%02x", __func__, __LINE__, DIO4485_REG_JACK_STATUS, reg_val);
+			typec_switch_status = 0;
 		} else if (switch_priv->vendor == WAS4783) {
 			reg_val = 0x00;
 			dev_info(dev, "%s, %d, write 0x%02x = 0x%02x", __func__, __LINE__, DEFAULT_REG_SWITCH_SELECT, reg_val);
@@ -769,6 +876,13 @@ static int typec_switch_usbc_analog_setup_switches(struct typec_switch_priv *swi
 			dev_info(dev, "%s, %d, set reg[0x%02x] done.\n", __func__, __LINE__, DEFAULT_REG_FUN_EN);
 			typec_switch_status = 0;
 
+		} else if (switch_priv->vendor == HL5281) {
+			typec_switch_usbc_update_settings(switch_priv, 0x00, 0x9F);
+			regmap_write(switch_priv->regmap, DEFAULT_REG_FUN_EN, 0x5D);
+			msleep(400);
+
+			dev_info(dev, "%s, %d, set reg[0x%02x] done.\n", __func__, __LINE__, DEFAULT_REG_FUN_EN);
+			typec_switch_status = 0;
 		} else {
 			reg_val = 0x9F;
 			dev_info(dev, "%s, %d, write 0x%02x = 0x%02x", __func__, __LINE__, DEFAULT_REG_SWITCH_SETTINGS, reg_val);
@@ -789,7 +903,10 @@ static int typec_switch_usbc_analog_setup_switches(struct typec_switch_priv *swi
 		regmap_read(switch_priv->regmap, DEFAULT_REG_JACK_STATUS, &jack_status);
 		dev_info(dev, "%s, %d, read reg[0x%02x] = 0x%02x\n", __func__, __LINE__, DEFAULT_REG_JACK_STATUS, jack_status);
 		// ZZZ No need?
-		if ((jack_status & 0x2) && (switch_priv->vendor != DIO4480 && switch_priv->vendor != DIO4483 && switch_priv->vendor != WAS4783)) {
+		if ((jack_status & 0x2) && (switch_priv->vendor != DIO4480
+                        && switch_priv->vendor != DIO4483
+                        && switch_priv->vendor != DIO4485
+                        && switch_priv->vendor != WAS4783)) {
 			//for 3 pole, mic switch to SBU2
 			dev_info(dev, "%s: set mic to sbu2 for 3 pole.\n", __func__);
 			typec_switch_usbc_update_settings(switch_priv, 0x00, 0x9F);
@@ -822,6 +939,18 @@ static int typec_switch_usbc_analog_setup_switches(struct typec_switch_priv *swi
 				dev_info(dev, "V1.2 %s: error status,swap MIC_GND\n", __func__);
 				typec_switch_write_register(switch_priv->regmap, DIO4483_REG_SWITCH_SELECT, 0x00);
 				typec_switch_write_register(switch_priv->regmap, DIO4483_REG_SWITCH_SETTINGS, 0x9f);
+
+				usleep_range(3000, 3005);
+				typec_switch_status = 1;
+			}
+		} else if (switch_priv->vendor == DIO4485) {
+			regmap_read(switch_priv->regmap, DIO4485_REG_JACK_STATUS, &jack_status);
+			dev_info(dev, "%s, %d, read reg[0x%02x] = 0x%02x.\n", __func__, __LINE__, DIO4485_REG_JACK_STATUS, jack_status);
+
+			if (jack_status == 0x01) {
+				dev_info(dev, "V1.2 %s: error status,swap MIC_GND\n", __func__);
+				typec_switch_write_register(switch_priv->regmap, DIO4485_REG_SWITCH_SELECT, 0x00);
+				typec_switch_write_register(switch_priv->regmap, DIO4485_REG_SWITCH_SETTINGS, 0x9f);
 
 				usleep_range(3000, 3005);
 				typec_switch_status = 1;
@@ -958,6 +1087,26 @@ static int typec_switch_usbc_analog_setup_switches(struct typec_switch_priv *swi
 			typec_switch_write_register(switch_priv->regmap, 0x21, 0x0f);
 			// */v1.2 end
 			dev_info(dev, "%s, %d, plugout. set to usb mode\n", __func__, __LINE__);
+		} else if (switch_priv->vendor == DIO4485) {
+			// /*v1.2
+			typec_switch_write_register(switch_priv->regmap, DIO4485_REG_RESET, 0x01);//reset DIO4485
+			usleep_range(1000, 1005);
+			typec_switch_write_register(switch_priv->regmap, DIO4485_REG_SWITCH_SELECT, 0x18);
+			typec_switch_write_register(switch_priv->regmap, DIO4485_REG_SWITCH_SETTINGS, 0x98);
+
+			typec_switch_write_register(switch_priv->regmap, 0x1c, 0x2a);
+			typec_switch_write_register(switch_priv->regmap, 0x1f, 0x0f);
+			typec_switch_write_register(switch_priv->regmap, 0x2e, 0x8f);
+			typec_switch_write_register(switch_priv->regmap, 0x2f, 0x45);
+			typec_switch_write_register(switch_priv->regmap, 0x2e, 0x72);
+			typec_switch_write_register(switch_priv->regmap, 0x0f, 0x00);
+			typec_switch_write_register(switch_priv->regmap, 0x10, 0x00);
+			typec_switch_write_register(switch_priv->regmap, 0x0e, 0x0b);
+			typec_switch_write_register(switch_priv->regmap, 0x0d, 0x0f);
+			typec_switch_write_register(switch_priv->regmap, 0x21, 0x0f);
+			typec_switch_write_register(switch_priv->regmap, 0x12, 0x10);
+			// */v1.2 end
+			dev_info(dev, "%s, %d, plugout. set to usb mode\n", __func__, __LINE__);
 		} else {
 			reg_val = 0;
 			SET_BIT(reg_val, DEFAULT_I2C_RESET);
@@ -979,10 +1128,14 @@ static int typec_switch_usbc_analog_setup_switches(struct typec_switch_priv *swi
 			ret = typec_switch_write_register(switch_priv->regmap, DEFAULT_REG_SWITCH_SETTINGS, reg_val);
 			dev_info(dev, "%s, %d, plugout. set to usb mode\n", __func__, __LINE__);
 
-			reg_val = 0; // 4.6V
-			SET_BIT(reg_val, DEFAULT_FUNCTION_SLOW_TURN_ON);
-			dev_info(dev, "%s, %d, write 0x%02x = 0x%02x", __func__, __LINE__, DEFAULT_REG_FUN_EN, reg_val);
-			ret = typec_switch_write_register(switch_priv->regmap, DEFAULT_REG_FUN_EN, reg_val);
+			if (switch_priv->vendor == HL5281) {
+				ret = typec_switch_write_register(switch_priv->regmap, DEFAULT_REG_FUN_EN, 0x18);
+			} else {
+				reg_val = 0; // 4.6V
+				SET_BIT(reg_val, DEFAULT_FUNCTION_SLOW_TURN_ON);
+				dev_info(dev, "%s, %d, write 0x%02x = 0x%02x", __func__, __LINE__, DEFAULT_REG_FUN_EN, reg_val);
+				ret = typec_switch_write_register(switch_priv->regmap, DEFAULT_REG_FUN_EN, reg_val);
+			}
 		}
 		if (ret != 0) {
 			reg_val = 0;
@@ -1078,6 +1231,14 @@ int typec_switch_event(struct device_node *node,
 				typec_switch_write_register(switch_priv->regmap, DIO4483_REG_SWITCH_SETTINGS, 0x87);
 				typec_switch_write_register(switch_priv->regmap, DIO4483_REG_SWITCH_SELECT, 0x07);
 				typec_switch_write_register(switch_priv->regmap, DIO4483_REG_SWITCH_SETTINGS, 0x9f);
+				typec_switch_status = 0;
+			}
+		} else if (switch_priv->vendor == DIO4485) {
+			if (typec_switch_status) {
+				pr_info("%s - switch event: %d delay 0ms\n", __func__, event);
+				typec_switch_write_register(switch_priv->regmap, DIO4485_REG_SWITCH_SETTINGS, 0x87);
+				typec_switch_write_register(switch_priv->regmap, DIO4485_REG_SWITCH_SELECT, 0x07);
+				typec_switch_write_register(switch_priv->regmap, DIO4485_REG_SWITCH_SETTINGS, 0x9f);
 				typec_switch_status = 0;
 			}
 		} else {
@@ -1246,6 +1407,15 @@ static void dio4483_update_reg_defaults(struct regmap *regmap)
 	}
 }
 
+static void dio4485_update_reg_defaults(struct regmap *regmap)
+{
+	u8 i;
+
+	for (i = 0; i < ARRAY_SIZE(dio4485_i2c_reg); i++) {
+		typec_switch_write_register(regmap, dio4485_i2c_reg[i].reg,
+				dio4485_i2c_reg[i].val);
+	}
+}
 static void default_update_reg_defaults(struct regmap *regmap)
 {
 	u8 i;
@@ -1552,6 +1722,14 @@ static int typec_switch_probe(struct i2c_client *i2c,
 	case DIO_CHIP_4483_2:
 		switch_priv->vendor = DIO4483;
 		break;
+	case DIO_CHIP_4485:
+		switch_priv->vendor = DIO4485;
+		dev_info(dev,"Chip type is DIO4485");
+		break;
+	case HL_CHIP_5281:
+		switch_priv->vendor = HL5281;
+		dev_info(dev,"Chip type is HL5281");
+		break;
 	case WAS_CHIP_4783:
 		switch_priv->vendor = WAS4783;
 		break;
@@ -1563,8 +1741,18 @@ static int typec_switch_probe(struct i2c_client *i2c,
 		dio4483_update_reg_defaults(switch_priv->regmap);
 	}
 
+	if (switch_priv->vendor == DIO4485) {
+		dio4485_update_reg_defaults(switch_priv->regmap);
+	}
+
 	if (switch_priv->vendor == WAS4783) {
 		default_update_reg_defaults(switch_priv->regmap);
+	}
+
+	if (switch_priv->vendor == HL5281) {
+		default_update_reg_defaults(switch_priv->regmap);
+		regmap_write(switch_priv->regmap, DEFAULT_REG_FUN_EN, 0x18);//default the compare
+		usleep_range(1*1000, 1*1005);
 	}
 
 	switch_priv->plug_state = false;
@@ -1759,6 +1947,11 @@ static void typec_switch_shutdown(struct i2c_client *i2c) {
 		return;
 	}
 
+        if (switch_priv->vendor == DIO4485) {
+		typec_switch_write_register(switch_priv->regmap, DIO4485_REG_RESET, 0x01);//reset DIO4485
+		return;
+	}
+
 	default_update_reg_defaults(switch_priv->regmap);
 
 	return;
@@ -1780,6 +1973,9 @@ static const struct of_device_id typec_switch_i2c_dt_match[] = {
 		.compatible = "qcom,dio4483-i2c",
 	},
 	{
+		.compatible = "qcom,dio4485-i2c",
+	},
+	{
 		.compatible = "mtk,was4783-i2c",
 	},
 	{}
@@ -1789,6 +1985,8 @@ static const struct i2c_device_id typec_switch_i2c_id[] = {
 	{ "typec_switch", 0 },
 	{ "dio4480", 0 },
 	{ "dio4483", 0 },
+	{ "dio4485", 0 },
+	{ "hl5281", 0 },
 	{ "was4783", 0 },
 	{ }
 };

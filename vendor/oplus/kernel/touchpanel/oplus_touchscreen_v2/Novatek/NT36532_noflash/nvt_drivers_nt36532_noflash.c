@@ -215,6 +215,64 @@ static const struct nvt_ts_mem_map NT36523_memory_map = {
 	.DMA_CRC_FLAG_ADDR		= 0x3F134,
 };
 
+static const struct nvt_ts_mem_map NT36523N_memory_map = {
+	.EVENT_BUF_ADDR           = 0x2FD00,
+	.RAW_PIPE0_ADDR           = 0x30FA0,
+	.RAW_PIPE1_ADDR           = 0x30FA0,
+	.BASELINE_ADDR            = 0x36510,
+	.BASELINE_BTN_ADDR        = 0,
+	.DIFF_PIPE0_ADDR          = 0x373E8,
+	.DIFF_PIPE1_ADDR          = 0x38068,
+	.RAW_BTN_PIPE0_ADDR       = 0,
+	.RAW_BTN_PIPE1_ADDR       = 0,
+	.DIFF_BTN_PIPE0_ADDR      = 0,
+	.DIFF_BTN_PIPE1_ADDR      = 0,
+	.PEN_2D_BL_TIP_X_ADDR     = 0x2988A,
+	.PEN_2D_BL_TIP_Y_ADDR     = 0x29A1A,
+	.PEN_2D_BL_RING_X_ADDR    = 0x29BAA,
+	.PEN_2D_BL_RING_Y_ADDR    = 0x29D3A,
+	.PEN_2D_DIFF_TIP_X_ADDR   = 0x29ECA,
+	.PEN_2D_DIFF_TIP_Y_ADDR   = 0x2A05A,
+	.PEN_2D_DIFF_RING_X_ADDR  = 0x2A1EA,
+	.PEN_2D_DIFF_RING_Y_ADDR  = 0x2A37A,
+	.PEN_2D_RAW_TIP_X_ADDR    = 0x2A50A,
+	.PEN_2D_RAW_TIP_Y_ADDR    = 0x2A69A,
+	.PEN_2D_RAW_RING_X_ADDR   = 0x2A82A,
+	.PEN_2D_RAW_RING_Y_ADDR   = 0x2A9BA,
+	.PEN_1D_DIFF_TIP_X_ADDR   = 0x2AB4A,
+	.PEN_1D_DIFF_TIP_Y_ADDR   = 0x2ABAE,
+	.PEN_1D_DIFF_RING_X_ADDR  = 0x2AC12,
+	.PEN_1D_DIFF_RING_Y_ADDR  = 0x2AC76,
+	.ENB_CASC_REG             = {.addr = 0x3F02C, .mask = 0x01},
+	/* FW History */
+	.MMAP_HISTORY_EVENT0      = 0x38D54,
+	.MMAP_HISTORY_EVENT1      = 0x38D94,
+	.MMAP_HISTORY_EVENT2      = 0x39700,
+	.MMAP_HISTORY_EVENT3      = 0x39740,
+	.DOZE_GM_S1D_SCAN_RAW_ADDR = 0x31F40,
+	.DOZE_GM_BTN_SCAN_RAW_ADDR = 0,
+	/* Phase 2 Host Download */
+	.BOOT_RDY_ADDR            = 0x3F10D,
+	.ACI_ERR_CLR_ADDR         = 0x3F705,
+	.TX_AUTO_COPY_EN          = 0x3F7E8,
+	.SPI_DMA_TX_INFO          = 0x3F7F1,
+	/* BLD CRC */
+	.BLD_LENGTH_ADDR          = 0x3F138,	/* 0x3F138 ~ 0x3F13A (3 bytes) */
+	.ILM_LENGTH_ADDR          = 0x3F118,	/* 0x3F118 ~ 0x3F11A (3 bytes) */
+	.DLM_LENGTH_ADDR          = 0x3F130,	/* 0x3F130 ~ 0x3F132 (3 bytes) */
+	.BLD_DES_ADDR             = 0x3F114,	/* 0x3F114 ~ 0x3F116 (3 bytes) */
+	.ILM_DES_ADDR             = 0x3F128,	/* 0x3F128 ~ 0x3F12A (3 bytes) */
+	.DLM_DES_ADDR             = 0x3F12C,	/* 0x3F12C ~ 0x3F12E (3 bytes) */
+	.G_ILM_CHECKSUM_ADDR      = 0x3F100,	/* 0x3F100 ~ 0x3F103 (4 bytes) */
+	.G_DLM_CHECKSUM_ADDR      = 0x3F104,	/* 0x3F104 ~ 0x3F107 (4 bytes) */
+	.R_ILM_CHECKSUM_ADDR      = 0x3F120,	/* 0x3F120 ~ 0x3F123 (4 bytes) */
+	.R_DLM_CHECKSUM_ADDR      = 0x3F124,	/* 0x3F124 ~ 0x3F127 (4 bytes) */
+	.DMA_CRC_EN_ADDR          = 0x3F136,
+	.BLD_ILM_DLM_CRC_ADDR     = 0x3F133,
+	.DMA_CRC_FLAG_ADDR        = 0x3F134,
+	.SPI_DMA_VAL_ADDR         = 0x3F7D0,
+};
+
 static struct nvt_ts_hw_info NT36532_hw_info = {
 	.hw_crc    = HWCRC_LEN_3Bytes,
 	.auto_copy = CHECK_TX_AUTO_COPY_EN,
@@ -257,6 +315,13 @@ static const struct nvt_ts_trim_id_table trim_id_table[] = {
 		.id = {0x0A, 0xFF, 0xFF, 0x23, 0x65, 0x03},
 		.mask = {1, 0, 0, 1, 1, 1},
 		.mmap = &NT36523_memory_map,
+		.hwinfo = &NT36523_hw_info
+	},
+	{
+		.id = {0x17, 0xFF, 0xFF, 0x23, 0x65, 0x03},
+		.mask = {1, 0, 0, 1, 1, 1},
+		.mmap = &NT36523N_memory_map,
+		.mmap_casc = &NT36523N_memory_map,
 		.hwinfo = &NT36523_hw_info
 	},
 	{
@@ -426,6 +491,15 @@ static void nvt_printk_fw_history(void *chip_data, uint32_t NVT_MMAP_HISTORY_ADD
 	}
 }
 
+void nvt_clear_aci_error_flag(struct chip_data_nt36523 *chip_info)
+{
+	if (chip_info->trim_id_table.mmap->ACI_ERR_CLR_ADDR == 0)
+		return;
+
+	nvt_write_addr(chip_info->s_client, chip_info->trim_id_table.mmap->ACI_ERR_CLR_ADDR, 0xA5);
+
+	nvt_set_page(chip_info, chip_info->trim_id_table.mmap->EVENT_BUF_ADDR);
+}
 
 static uint8_t nvt_wdt_fw_recovery(struct chip_data_nt36523 *chip_info,
 				   uint8_t *point_data)
@@ -449,6 +523,7 @@ static uint8_t nvt_wdt_fw_recovery(struct chip_data_nt36523 *chip_info,
 		chip_info->recovery_cnt = 0;
 		if (point_data[1] == 0xFE) {
 			nvt_sw_reset_idle(chip_info);
+			nvt_clear_aci_error_flag(chip_info);
 		}
 		nvt_ts_read_history_log(chip_info);
 	}
@@ -749,7 +824,7 @@ static int8_t nvt_ts_check_chip_ver_trim(struct chip_data_nt36523 *chip_info,
 				if (trim_id_table[list].mmap->ENB_CASC_REG.addr) {
 					/* check single or cascade */
 					nvt_read_reg(chip_info, trim_id_table[list].mmap->ENB_CASC_REG, &enb_casc);
-					/* TPD_INFO("ENB_CASC=0x%02X\n", enb_casc); */
+					 TPD_INFO("ENB_CASC=0x%02X\n", enb_casc);
 					if (enb_casc & 0x01) {
 						TPD_INFO("Single Chip\n");
 						chip_info->trim_id_table.mmap = trim_id_table[list].mmap;
@@ -985,6 +1060,7 @@ static int32_t nvt_bin_header_parser(struct chip_data_nt36523 *chip_info,
 		}
 
 		info_sec_num = info_sec_num + 1; /*next header section */
+		chip_info->spi_dma_div_cnt_val = fwdata[0x29] & 0x01;
 	} else {
 		pos = 0x30;	/* info section start at 0x30 offset */
 		while (pos < tmp_end) {
@@ -1497,6 +1573,30 @@ static void nvt_read_bld_hw_crc(struct chip_data_nt36523 *chip_info)
 	return;
 }
 
+static void nvt_spi_dma_setup(struct chip_data_nt36523 *chip_info)
+{
+	uint8_t buf[33] = {0};
+
+	if (chip_info->trim_id_table.mmap->SPI_DMA_VAL_ADDR) {
+		nvt_set_page(chip_info, chip_info->bin_map[1].SRAM_addr);
+		buf[0] = chip_info->bin_map[1].SRAM_addr & 0x7F;
+		CTP_SPI_WRITE(chip_info->s_client, buf, 33);
+
+		nvt_set_page(chip_info, chip_info->trim_id_table.mmap->SPI_DMA_VAL_ADDR);
+		buf[0] = chip_info->trim_id_table.mmap->SPI_DMA_VAL_ADDR & 0x7F;
+		buf[1] = 0x35;
+		buf[2] = 0x32;
+		buf[3] = 0xAA;
+		buf[4] = 0x00;
+		CTP_SPI_WRITE(chip_info->s_client, buf, 5);
+
+		TPD_INFO("set spi dma val finish\n");
+	} else {
+		TPD_INFO("spi dma val addr is NULL\n");
+	}
+	return;
+}
+
 #if NVT_TOUCH_ESD_DISP_RECOVERY
 static int32_t nvt_check_crc_done_ilm_err(struct chip_data_nt36523 *chip_info)
 {
@@ -1671,6 +1771,10 @@ static int32_t Download_Firmware_HW_CRC(struct chip_data_nt36523 *chip_info,
 	/* Start Write Firmware Process */
 	if (chip_info->cascade_2nd_header_info) {
 		/* for cascade */
+		if (chip_info->spi_dma_div_cnt_val) {
+			nvt_spi_dma_setup(chip_info);
+		}
+
 		nvt_tx_auto_copy_mode(chip_info);
 
 		ret = Write_Partition(chip_info, fw->data, fw->size);
@@ -8632,7 +8736,6 @@ static void nvt_prase_dts(struct device *dev, void *chip_data)
 			rc = of_property_read_u32_array(np, "touchpanel,pen-id-map", (uint32_t *)chip_info->pen_id_map_array, length);
 			if (rc < 0) {
 				TPD_INFO("parse touchpanel,pen-id-map failed, rc=%d\n", rc);
-				devm_kfree(dev, chip_info->pen_id_map_array);
 				chip_info->pen_id_map_num = 0;
 			} else {
 				TPD_INFO("pen_id_map num = %d\n", chip_info->pen_id_map_num);

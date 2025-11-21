@@ -33,9 +33,10 @@
 #include <linux/gameport.h>
 #include <linux/moduleparam.h>
 #include <linux/mutex.h>
+#include <linux/version.h>
 
 
-#define SIPA_DRIVER_VERSION					("3.1.0b")
+#define SIPA_DRIVER_VERSION					("3.1.0d-0506")
 #define SIPA_MAX_CHANNEL_SUPPORT			(8)
 
 struct sipa_err {
@@ -94,10 +95,12 @@ typedef struct sipa_dev_s {
 	uint32_t en_spk_cal_dl;
 	uint32_t spk_model_flag;
 	uint8_t  pa_status;
-
+	uint8_t  fw_load_count;
 #if IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_FEEDBACK)
-/* 2023/04/18, Add for smartpa err feedback. */
-	ktime_t last_fb;
+/* 2024/07/08, Add for smartpa vbatlow err check. */
+	uint32_t check_fb;
+	uint32_t vbatlow_cnt;
+	uint32_t control_fb;
 #endif /*CONFIG_OPLUS_FEATURE_MM_FEEDBACK*/
 
 //#ifdef SIA91XX_TYPE
@@ -111,15 +114,26 @@ typedef struct sipa_dev_s {
 	struct sipa_err err_info;
 	bool sipa_on;
 	bool sipa_reboot;
+#if IS_ENABLED(CONFIG_SND_SOC_OPLUS_PA_MANAGER)
+	unsigned int pre_scene;
+#endif /*CONFIG_SND_SOC_OPLUS_PA_MANAGER*/
 
 //#ifdef OPLUS_ARCH_EXTENDS
 /* 2023/03/05, Add for calibration */
 	uint32_t min_mohms;
 	uint32_t max_mohms;
+/* 2024/07/04, Add for f0 calibration */
+	uint32_t min_f0;
+	uint32_t max_f0;
+	uint32_t need_f0_cali;
 #ifdef CONFIG_DEBUG_FS
-  	struct dentry *dbg_dir;
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0))
+	struct dentry *dbg_dir;
 #else
-  	struct proc_dir_entry *dbg_dir;
+	struct proc_dir_entry *dbg_dir;
+#endif
+#else
+	struct proc_dir_entry *dbg_dir;
 #endif/*CONFIG_DEBUG_FS*/
 //endif
 } sipa_dev_t;
@@ -168,10 +182,36 @@ enum {
 	CHIP_TYPE_SIA81X9,
 	CHIP_TYPE_SIA8152X,
 	CHIP_TYPE_SIA917X,
+	CHIP_TYPE_SIA8157,
+	CHIP_TYPE_SIA8001,
+	CHIP_TYPE_SIA8102,
 	// add compatible chip type here
 	CHIP_TYPE_UNKNOWN,
 	CHIP_TYPE_INVALID
 };
+
+#define IS_DIGITAL_PA_TYPE(type) \
+			(type == CHIP_TYPE_SIA9195 || \
+			 type == CHIP_TYPE_SIA9175 || \
+			 type == CHIP_TYPE_SIA9196 || \
+			 type == CHIP_TYPE_SIA9177 || \
+			 type == CHIP_TYPE_SIA917X) \
+			 ? true \
+			 : false
+
+#define IS_SUPPORT_OWI_TYPE(type) \
+			(type == CHIP_TYPE_SIA8001  || \
+			 type == CHIP_TYPE_SIA8102  || \
+			 type == CHIP_TYPE_SIA8100X )  \
+			 ? true \
+			 : false
+
+#define IS_NEED_PULL_RST_TYPE(type) \
+			(type == CHIP_TYPE_SIA81X9  || \
+			 type == CHIP_TYPE_SIA8109  || \
+			 type == CHIP_TYPE_SIA8157)    \
+			 ? true \
+			 : false
 
 #define SIPA_MAX_REG_ADDR					(0xFF)
 

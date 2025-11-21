@@ -21,6 +21,7 @@
 #include <linux/slab.h>
 
 #include "sa_oemdata.h"
+#include "sa_common_struct.h"
 
 #define SA_DEBUG_ON 0
 
@@ -65,6 +66,7 @@
 #define SA_TYPE_ANIMATOR			(1 << 2)
 /* SA_TYPE_LISTPICK for camera */
 #define SA_TYPE_LISTPICK			(1 << 3)
+#define SA_TYPE_MQ_VIP				(1 << 4)
 #define SA_OPT_SET					(1 << 7)
 #define SA_OPT_RESET				(1 << 8)
 #define SA_OPT_SET_PRIORITY			(1 << 9)
@@ -90,10 +92,18 @@
 #define SCHED_ASSIST_UX_PRIORITY_MASK	(0xFF000000)
 #define SCHED_ASSIST_UX_PRIORITY_SHIFT	24
 
+#define SCHED_QOS_LATENCY_MAGIC_MASK	(0xF00000000)
+#define SCHED_QOS_LATENCY_MAGIC_SHIFT	32
+#define SCHED_QOS_LATENCY_MAGIC	3
+
+#define SCHED_PIDQOS_ACTIVE_MAGIC_MASK	(0x1000000)
+#define SCHED_PIDQOS_ACTIVE_MAGIC_SHIFT	24
+#define SCHED_PIDQOS_ACTIVE_MAGIC	1
 #define UX_PRIORITY_TOP_APP		0x0A000000
 #define UX_PRIORITY_AUDIO		0x0A000000
 #if IS_ENABLED(CONFIG_OPLUS_FEATURE_PIPELINE)
-#define UX_PRIORITY_PIPELINE	0x09000000
+#define UX_PRIORITY_PIPELINE_UI 0x06000000
+#define UX_PRIORITY_PIPELINE    0x05000000
 #endif
 
 /* define for sched assist scene type, keep same as the define in java file */
@@ -120,12 +130,9 @@
 extern pid_t save_audio_tgid;
 extern pid_t save_top_app_tgid;
 extern unsigned int top_app_type;
-extern int global_lowend_plat_opt;
 
 /* define for boost threshold unit */
 #define BOOST_THRESHOLD_UNIT (51)
-
-#define MAX_CLUSTER          (3)
 /* define for clear IM_FLAG
 if im_flag is 70, it should clear im_flag_audio (70 - 64 = 6)
 eg: gerrit patchset "30438485"
@@ -145,6 +152,7 @@ enum INHERIT_UX_TYPE {
 	INHERIT_UX_RWSEM,
 	INHERIT_UX_MUTEX,
 	INHERIT_UX_FUTEX,
+	INHERIT_UX_PIFUTEX,
 	INHERIT_UX_MAX,
 };
 
@@ -165,14 +173,23 @@ enum IM_FLAG_TYPE {
 	IM_FLAG_LAUNCHER,
 	IM_FLAG_LAUNCHER_NON_UX_RENDER,
 	IM_FLAG_SS_LOCK_OWNER,
-	IM_FLAG_FORBID_SET_CPU_AFFINITY, /* forbid setting cpu affinity from app */
+	IM_FLAG_FORBID_SET_CPU_AFFINITY = 11, /* forbid setting cpu affinity from app */
 	IM_FLAG_SYSTEMSERVER_PID,
 	IM_FLAG_MIDASD,
 	IM_FLAG_AUDIO_CAMERA_HAL, /* audio mode disable camera hal ux */
+	IM_FLAG_AFFINITY_THREAD,
+	IM_FLAG_TPD_SET_CPU_AFFINITY = 16,
+	IM_FLAG_COMPRESS_THREAD = 17, /* compress thread skips locking protect */
+	IM_FLAG_RENDER_THREAD = 18,
+	IM_FLAG_CAMERAHAL_THREAD = 20,
 	MAX_IM_FLAG_TYPE,
 };
 
 #define MAX_IM_FLAG_PRIO	MAX_IM_FLAG_TYPE
+enum ots_state {
+	OTS_STATE_SET_AFFINITY,
+	OTS_STATE_MAX,
+};
 
 struct ux_sched_cluster {
 	struct cpumask cpus;
@@ -189,144 +206,6 @@ struct ux_sched_cputopo {
 	cpumask_t oplus_cpu_array[2*OPLUS_MAX_CLS][OPLUS_MAX_CLS];
 #endif
 };
-
-#if IS_ENABLED(CONFIG_OPLUS_FEATURE_CPU_JANKINFO)
-#define MAX_TASK_COMM_LEN 256
-struct uid_struct {
-	uid_t uid;
-	u64 uid_total_cycle;
-	u64 uid_total_inst;
-	spinlock_t lock;
-	char leader_comm[TASK_COMM_LEN];
-	char cmdline[MAX_TASK_COMM_LEN];
-};
-
-struct  amu_uid_entry {
-	uid_t uid;
-	struct uid_struct *uid_struct;
-	struct hlist_node node;
-};
-
-#endif
-
-#if IS_ENABLED(CONFIG_OPLUS_LOCKING_STRATEGY)
-struct locking_info {
-	u64 waittime_stamp;
-	u64 holdtime_stamp;
-	/* Used in torture acquire latency statistic.*/
-	u64 acquire_stamp;
-	/*
-	 * mutex or rwsem optimistic spin start time. Because a task
-	 * can't spin both on mutex and rwsem at one time, use one common
-	 * threshold time is OK.
-	 */
-	u64 opt_spin_start_time;
-	struct task_struct *holder;
-	u32 waittype;
-	bool ux_contrib;
-	/*
-	 * Whether task is ux when it's going to be added to mutex or
-	 * rwsem waiter list. It helps us check whether there is ux
-	 * task on mutex or rwsem waiter list. Also, a task can't be
-	 * added to both mutex and rwsem at one time, so use one common
-	 * field is OK.
-	 */
-	bool is_block_ux;
-};
-#endif
-
-/* Please add your own members of task_struct here :) */
-struct oplus_task_struct {
-	/* CONFIG_OPLUS_FEATURE_SCHED_ASSIST */
-	struct rb_node ux_entry;
-	struct rb_node exec_time_node;
-	struct task_struct *task;
-	atomic64_t inherit_ux;
-	u64 enqueue_time;
-	u64 inherit_ux_start;
-	/* u64 sum_exec_baseline; */
-	u64 total_exec;
-	u64 vruntime;
-	u64 preset_vruntime;
-	int ux_state;
-	u8 ux_depth;
-	s8 ux_priority;
-	s8 ux_nice;
-	unsigned long im_flag;
-#if IS_ENABLED(CONFIG_OPLUS_FEATURE_ABNORMAL_FLAG)
-	int abnormal_flag;
-#endif
-	/* CONFIG_OPLUS_FEATURE_SCHED_SPREAD */
-	int lb_state;
-	int ld_flag:1;
-	/* CONFIG_OPLUS_FEATURE_TASK_LOAD */
-	int is_update_runtime:1;
-	int target_process;
-	u64 wake_tid;
-	u64 running_start_time;
-	bool update_running_start_time;
-	u64 exec_calc_runtime;
-#if IS_ENABLED(CONFIG_OPLUS_FEATURE_CPU_JANKINFO)
-	u64 block_start_time;
-#endif
-	/* CONFIG_OPLUS_FEATURE_FRAME_BOOST */
-	struct list_head fbg_list;
-	raw_spinlock_t fbg_list_entry_lock;
-	bool fbg_running; /* task belongs to a group, and in running */
-	u16 fbg_state;
-	s8 preferred_cluster_id;
-	s8 fbg_depth;
-	u64 last_wake_ts;
-	int fbg_cur_group;
-#ifdef CONFIG_LOCKING_PROTECT
-	unsigned long locking_start_time;
-	struct list_head locking_entry;
-	int locking_depth;
-	int lk_tick_hit;
-#endif
-
-#if IS_ENABLED(CONFIG_OPLUS_LOCKING_STRATEGY)
-	struct locking_info lkinfo;
-#endif
-
-#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FDLEAK_CHECK)
-	u8 fdleak_flag;
-#endif
-
-#if IS_ENABLED(CONFIG_OPLUS_FEATURE_LOADBALANCE)
-	/* for loadbalance */
-	struct plist_node rtb;		/* rt boost task */
-
-	/*
-	 * The following variables are used to calculate the time
-	 * a task spends in the running/runnable state.
-	 */
-	u64 snap_run_delay;
-	unsigned long snap_pcount;
-#endif
-#if IS_ENABLED(CONFIG_ARM64_AMU_EXTN) && IS_ENABLED(CONFIG_OPLUS_FEATURE_CPU_JANKINFO)
-	struct uid_struct *uid_struct;
-	u64 amu_instruct;
-	u64 amu_cycle;
-#endif
-
-#if IS_ENABLED(CONFIG_OPLUS_FEATURE_PIPELINE)
-	atomic_t pipeline_cpu;
-#endif
-	/* for binder ux */
-	int binder_async_ux_enable;
-	bool binder_async_ux_sts;
-	int binder_thread_mode;
-	struct binder_node *binder_thread_node;
-} ____cacheline_aligned;
-
-#if IS_ENABLED(CONFIG_OPLUS_FEATURE_LOADBALANCE)
-#define INVALID_PID						(-1)
-struct oplus_lb {
-	/* used for active_balance to record the running task. */
-	pid_t pid;
-};
-#endif
 
 struct oplus_rq {
 	/* CONFIG_OPLUS_FEATURE_SCHED_ASSIST */
@@ -351,8 +230,11 @@ struct oplus_rq {
 };
 
 extern int global_debug_enabled;
+extern int global_lowend_plat_opt;
 extern int global_sched_assist_enabled;
 extern int global_sched_assist_scene;
+extern int global_sched_control_ux_select;
+extern int global_sched_disable_camera_ux;
 
 struct rq;
 
@@ -467,7 +349,7 @@ static inline int oplus_get_ux_state(struct task_struct *t)
 	return ots->ux_state;
 }
 
-void oplus_set_ux_state_lock(struct task_struct *t, int ux_state, bool need_lock_rq);
+void oplus_set_ux_state_lock(struct task_struct *t, int ux_state, int inherit_type, bool need_lock_rq);
 
 static inline s64 oplus_get_inherit_ux(struct task_struct *t)
 {
@@ -566,6 +448,7 @@ static inline void init_task_ux_info(struct task_struct *t)
 	ots->ux_nice = -1;
 	ots->vruntime = 0;
 	ots->preset_vruntime = 0;
+	ots->cfs_delta = -1;
 #if IS_ENABLED(CONFIG_OPLUS_FEATURE_ABNORMAL_FLAG)
 	ots->abnormal_flag = 0;
 #endif
@@ -573,6 +456,7 @@ static inline void init_task_ux_info(struct task_struct *t)
 	ots->lb_state = 0;
 	ots->ld_flag = 0;
 #endif
+	cpumask_clear(&ots->cpus_requested);
 	ots->exec_calc_runtime = 0;
 	ots->is_update_runtime = 0;
 	ots->target_process = -1;
@@ -618,6 +502,10 @@ static inline void init_task_ux_info(struct task_struct *t)
 	if (!strncmp(t->comm, "C2OMXNode", 15) || !strncmp(t->comm, "MP4WtrAudTrkThr", 15) || !strncmp(t->comm, "MP4WtrVidTrkThr", 15)) {
 			ots->ux_state = SA_TYPE_ANIMATOR;
 	}
+#endif
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_QOS_SCHED)
+	ots->qos_level = -1;
+	ots->qos_recover_prio = -2;
 #endif
 };
 
@@ -677,6 +565,7 @@ static inline u32 task_wts_sum(struct task_struct *tsk)
 bool is_min_cluster(int cpu);
 bool is_max_cluster(int cpu);
 bool is_mid_cluster(int cpu);
+bool im_mali(const char *comm);
 bool is_top(struct task_struct *p);
 bool task_is_runnable(struct task_struct *task);
 int get_ux_state(struct task_struct *task);
@@ -713,7 +602,7 @@ bool test_set_inherit_ux(struct task_struct *task);
 bool test_task_identify_ux(struct task_struct *task, int id_type_ux);
 bool test_list_pick_ux(struct task_struct *task);
 int get_ux_state_type(struct task_struct *task);
-void sched_assist_target_comm(struct task_struct *task, const char *buf);
+void sched_assist_target_comm(struct task_struct *task, const char *comm);
 unsigned int ux_task_exec_limit(struct task_struct *p);
 
 void update_ux_sched_cputopo(void);
@@ -723,6 +612,7 @@ ssize_t oplus_show_cpus(const struct cpumask *mask, char *buf);
 void adjust_rt_lowest_mask(struct task_struct *p, struct cpumask *local_cpu_mask, int ret, bool force_adjust);
 bool sa_skip_rt_sync(struct rq *rq, struct task_struct *p, bool *sync);
 bool sa_rt_skip_ux_cpu(int cpu);
+int is_vip_mvp(struct task_struct *p);
 
 /* s64 account_ux_runtime(struct rq *rq, struct task_struct *curr); */
 void opt_ss_lock_contention(struct task_struct *p, unsigned long old_im, int new_im);
@@ -747,6 +637,9 @@ void set_im_flag_with_bit(int im_flag, struct task_struct *task);
 void android_vh_cgroup_set_task_handler(void *unused, int ret, struct task_struct *task);
 /* register vendor hook in kernel/signal.c  */
 void android_vh_exit_signal_handler(void *unused, struct task_struct *p);
+#if IS_ENABLED(CONFIG_OPLUS_SCHED_GROUP_OPT)
+void android_rvh_cpu_cgroup_online_handler(void *unused, struct cgroup_subsys_state *css);
+#endif
 #if IS_ENABLED(CONFIG_OPLUS_FEATURE_BAN_APP_SET_AFFINITY)
 void android_vh_sched_setaffinity_early_handler(void *unused, struct task_struct *task, const struct cpumask *new_mask, int *skip);
 #endif

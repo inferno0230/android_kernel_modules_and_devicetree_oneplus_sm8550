@@ -44,7 +44,10 @@ struct focal_testdata {
 	bool fd_support;
 	bool fingerprint_underscreen_support;
 	uint64_t test_item;
+	/*raw cap test max min test*/
+	int raw_cap_restriction;
 };
+
 /*test item*/
 enum {
 	TYPE_ERROR                                  = 0x00,

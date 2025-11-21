@@ -44,5 +44,6 @@ int ext_amp_check_feedback_set(struct snd_kcontrol *kcontrol, struct snd_ctl_ele
 int oplus_spkr_pa_event(struct snd_soc_dapm_widget *w, struct snd_kcontrol *kcontrol, int event);
 int oplus_add_pa_manager_snd_controls(struct snd_soc_component *component);
 int oplus_add_analog_pa_manager_dapm(struct snd_soc_dapm_context *dapm);
+void set_pa_index_order(int m_pa_index);
 /*------------------------------------------------------------------------------*/
 #endif /* __OPLUS_SPEAKER_MANAGER_H__ */

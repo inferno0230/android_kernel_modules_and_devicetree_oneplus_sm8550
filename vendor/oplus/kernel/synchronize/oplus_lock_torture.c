@@ -209,7 +209,7 @@ static void torture_fixed_delay(unsigned long delay_us)
 
 static int set_current_ux(int rw)
 {
-	oplus_set_ux_state_lock(current, SA_TYPE_LISTPICK, false);
+	oplus_set_ux_state_lock(current, SA_TYPE_LISTPICK, -1, false);
     return 0;
 }
 

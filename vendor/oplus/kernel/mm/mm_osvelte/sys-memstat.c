@@ -7,7 +7,7 @@
 #include <linux/hashtable.h>
 #include <trace/hooks/mm.h>
 
-#include "common.h"
+#include "internal.h"
 #include "memstat.h"
 #include "sys-memstat.h"
 

@@ -16,5 +16,5 @@ int oplus_sched_assist_proc_init(void);
 void oplus_sched_assist_proc_deinit(void);
 
 extern struct task_struct *find_task_by_vpid(pid_t vnr);
-
+long write_task_ux(pid_t pid, pid_t tid, int ux_value, bool fromSysOrApp);
 #endif /* _OPLUS_SA_SYSFS_H_ */

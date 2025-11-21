@@ -45,7 +45,6 @@ dtbo-y += crow-audio.dtbo \
 #                 crow-audio-qrd.dtbo \
 #                 crow-audio-atp.dtbo
 #OPLUS_DTS_OVERLAY start
-dtbo-y += oplus/benz-23061-audio-crow-overlay.dtbo
 #OPLUS_DTS_OVERLAY end
 endif
 

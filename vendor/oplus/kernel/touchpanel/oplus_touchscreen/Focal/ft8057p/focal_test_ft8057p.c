@@ -1,5 +1,5 @@
 /**************************************************************
- * Copyright (c)  2008- 2030  Oplus Mobile communication Corp.ltd.£¬
+ * Copyright (c)  2008- 2030  oplus Mobile communication Corp.ltd.£¬
  *
  * File           : focaltech_test_ft8006s_aa.c
  * Description: Source file for focal FT8006S-AA

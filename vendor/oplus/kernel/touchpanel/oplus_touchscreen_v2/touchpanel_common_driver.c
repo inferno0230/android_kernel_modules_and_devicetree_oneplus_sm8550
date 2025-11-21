@@ -1518,6 +1518,11 @@ EXIT:
 		if (ts->exception_upload_support) {
 			tp_exception_report(&ts->exception_data, EXCEP_FW_UPDATE, "FW_Update_Failed", sizeof("FW_Update_Failed"));
 		}
+		/*if probe_status is not exit, olc will update log*/
+		ts->is_update_log = 1;
+	} else {
+		/*if probe_status is not exit, olc will update log*/
+		ts->is_update_log = 0;
 	}
 
 	ts->force_update = 0;
@@ -2135,6 +2140,18 @@ static void init_panel_config(struct device *dev, struct touchpanel_data *ts)
 	} else {
 		if (val < INTERRUPT_MODE_MAX) {
 			ts->int_mode = val;
+		}
+	}
+
+	rc = of_property_read_u32(chip_np, "touchpanel,tcm-skip-time", &val);
+
+	if (rc) {
+		TP_BOOT_INFO(ts->tp_index, "touchpanel,tcm-skip-time specified\n");
+		ts->tcm_skip_time = BANNABLE;
+	} else {
+		if (val < INTERRUPT_MODE_MAX) {
+			ts->tcm_skip_time = val;
+			TP_BOOT_INFO(ts->tp_index, "tcm-skip-time 1\n");
 		}
 	}
 }
@@ -3451,13 +3468,11 @@ static void tp_delta_read_triggered_by_key_handle(struct work_struct *work)
 	struct debug_info_proc_operations *debug_info_ops;
 	struct touchpanel_data *ts = container_of(work, struct touchpanel_data,
 				key_trigger_work);
-
+	if (!ts)
+		return;
 	TP_INFO(ts->tp_index, "%s:tp_debug= %d\n", __func__, tp_debug);
 
 	if (tp_debug != 2)
-		return;
-
-	if (!ts)
 		return;
 
 	touchpanel_trusted_touch_completion(ts);
@@ -3836,6 +3851,9 @@ int register_common_touch_device(struct touchpanel_data *pdata)
 	touchpanel_trusted_touch_init(ts);
 #endif
 	/*wake_lock_init(&ts->wakelock, WAKE_LOCK_SUSPEND, "tp_wakelock");*/
+	ts->is_update_log = 0;
+	init_probe_status_proc(ts);
+
 	/*step5 : power init*/
 	if(strcmp(ts->touch_environment, "tvm") != 0) {
 		ret = tp_power_init(ts);
@@ -4858,6 +4876,7 @@ static void lcd_off_early_event(struct touchpanel_data *ts)
 	} else if (ts->tp_suspend_order == LCD_TP_SUSPEND) {
 		if (!ts->gesture_enable && ts->is_incell_panel) {
 			disable_irq_nosync(ts->irq);
+			ts->irq_state = 0;
 		}
 	}
 
@@ -5556,20 +5575,15 @@ static int tp_control_irq_state(bool enable, unsigned int tp_index)
 	}
 	ts = get_ts_data(tp_index);
 
-	if (!ts) {
+	if (!ts->ts_ops->tp_irq_control) {
 		return 0;
 	}
 
-	TP_INFO(ts->tp_index, "%s %d, %s ts->irq=%d\n", __func__, enable,
-		enable ? "enable" : "disable", ts->irq);
 	if (enable == 1) {
-		enable_irq(ts->irq);
-		TP_INFO(ts->tp_index, "%s: enable_irq.\n", __func__);
+		ts->ts_ops->tp_irq_control(ts->chip_data, true, 0);
 	} else {
-		disable_irq_nosync(ts->irq);
-		TP_INFO(ts->tp_index, "%s: disable_irq_nosync.\n", __func__);
+		ts->ts_ops->tp_irq_control(ts->chip_data, false, 0);
 	}
-
 	return 0;
 }
 

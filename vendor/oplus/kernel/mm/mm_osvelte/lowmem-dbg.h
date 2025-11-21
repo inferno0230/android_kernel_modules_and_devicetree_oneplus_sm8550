@@ -4,6 +4,7 @@
  */
 #ifndef _LOWMEM_DBG_H
 #define _LOWMEM_DBG_H
+#include "internal.h"
 
 int osvelte_lowmem_dbg_init(struct proc_dir_entry *root);
 int osvelte_lowmem_dbg_exit(void);

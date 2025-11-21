@@ -579,6 +579,7 @@ static inline struct kthread *__to_kthread(struct task_struct *p)
 bool kthread_is_per_cpu(struct task_struct *p)
 {
 	struct kthread *kthread = __to_kthread(p);
+
 	if (!kthread)
 		return false;
 
@@ -625,6 +626,10 @@ int can_migrate_task(struct task_struct *p, struct lb_env *env)
 
 	if (!cpumask_test_cpu(env->dst_cpu, p->cpus_ptr)) {
 		int cpu;
+
+		/* Discard migration_disabled tasks*/
+		if (is_migration_disabled(p))
+			return 0;
 
 		/*
 		 * del by oplus.
@@ -941,7 +946,7 @@ u64 max_running_time;
  * This interface is valid for all tasks including cfs and rt tasks.
  * The timer_sel parameter is used to select the time to be returned.
  * true returns runnable time while false returns running time.
-*/
+ */
 u64 __get_time(struct task_struct *tsk, bool time_sel)
 {
 	struct oplus_task_struct *ots;
@@ -1123,7 +1128,8 @@ bool ux_need_up_migration(struct task_struct *p, struct rq *rq)
  *                          with smaller capacity to CPUs with larger capacity.
  * TICKPULL_MIGR_RUNNABLE : pull long-runnable tasks from other CPUs. Unlike
  *                          TICKPULL_MIGR_RUNNING, tasks can be migrated to
- *                          CPUs with the same capacity.
+ *                          CPUs with the same capacity  or little util tasks
+ *                          can been migrated to small cores.
  */
 enum migr_type {
 	DOWN_MIGR = 1,
@@ -1206,7 +1212,7 @@ enum migr_type {
  *
  * TICKPULL_MIGR_RUNNABLE
  * cur_idx    order_idx   walk_cnt
- *    0            0          1
+ *    0            0          3    (only little util task can been migrated to small cores)
  *    1            1          3
  *    2            2          1
  *
@@ -1237,7 +1243,7 @@ bool calc_order_idx(enum migr_type type,
 		if (curr_cls == 0)
 			goto fail;
 
-		*order_idx = curr_cls + cls_nr -1;
+		*order_idx = curr_cls + cls_nr - 1;
 		*walk_cnt = curr_cls;
 		break;
 	case UP_MIGR:
@@ -1292,10 +1298,14 @@ bool calc_order_idx(enum migr_type type,
 		break;
 	case TICKPULL_MIGR_RUNNABLE:
 		*order_idx = curr_cls;
-		if ((cls_nr >= 3) && (curr_cls == cls_nr-2)) {
-			*walk_cnt = cls_nr;
-		} else {
+		/*
+		 * When curr_cls is biggest cores, only allow pull other biggest cores' task to it,
+		 * meanwhile, will allow sliver cores to pull other cores' task to it after ajust the logic.
+		 */
+		if (curr_cls == cls_nr-1) {
 			*walk_cnt = 1;
+		} else {
+			*walk_cnt = cls_nr;
 		}
 		break;
 	default:
@@ -2013,6 +2023,7 @@ static noinline bool oplus_migrate_runnable_ux(void *data, struct rq *rq)
 	unsigned int this_cpu = cpu_of(rq);
 	int new_cpu = -1;
 	bool ret = false;
+	bool ux_cls_boost = false;
 
 	/*
 	 * Pick a ux_task that has been in the runnable state for a long time.
@@ -2025,6 +2036,11 @@ static noinline bool oplus_migrate_runnable_ux(void *data, struct rq *rq)
 	 * Choose a suitable cpu for this ux_task.
 	 */
 	new_cpu = find_cpu_in_migration(ux_task, this_cpu, NORMAL_MIGR, false);
+	if (new_cpu < 0) {
+		ux_cls_boost = get_task_cls_for_scene(ux_task) > 0 ? true : false;
+		if (!ux_cls_boost && !is_task_util_over(ux_task, BOOST_THRESHOLD_UNIT))
+			new_cpu = find_cpu_in_migration(ux_task, this_cpu, DOWN_MIGR, false);
+	}
 	if (new_cpu < 0)
 		return false;
 
@@ -2435,6 +2451,15 @@ static noinline bool oplus_tickpull_runnable_rt(void *data,
 				continue;
 			}
 
+			/*
+			 * Just allow big cores' <light util> rt task can been pulled to sliver core.
+			 */
+			if (cur_cls == 0 && topology_physical_package_id(iter_cpu) > 0 &&
+				is_task_util_over(rt_task, BOOST_THRESHOLD_UNIT)) {
+				rq_unlock(busiest_rq, &rf);
+				continue;
+			}
+
 #ifdef DEBUG_LB_RT_TICK
 			trace_printk("OPLUS_LB_TICKPULL[%d]: this_cpu=%d, curr=%s$%d, "
 				"busiest_cpu=%d, rt_task=%s$%d,\n",
@@ -2488,7 +2513,7 @@ static noinline bool oplus_tickpull_running_ux(void *data, struct rq *rq)
 	 * Do not pull tasks from other CPUs if the running task on
 	 * the CPU is rt or ux.
 	 */
-	if(test_task_is_rt(curr))
+	if (test_task_is_rt(curr))
 		return false;
 
 	if (get_ux_state(curr) & POSSIBLE_UX_MASK)
@@ -2632,7 +2657,7 @@ static noinline bool oplus_tickpull_runnable_ux(void *data, struct rq *rq)
 	 * Do not pull tasks from other CPUs if the running task on
 	 * the CPU is rt or ux.
 	 */
-	if(test_task_is_rt(curr))
+	if (test_task_is_rt(curr))
 		return false;
 
 	if (get_ux_state(curr) & POSSIBLE_UX_MASK)
@@ -2710,6 +2735,15 @@ static noinline bool oplus_tickpull_runnable_ux(void *data, struct rq *rq)
 			 */
 			iter_task = oplus_pick_runnable_ux(iter_cpu, this_cpu, NULL);
 			if (!iter_task) {
+				rq_unlock(iter_rq, &rf);
+				continue;
+			}
+
+			/*
+			 * Just allow big cores' <light util && no ux_boost> ux task can been pulled to sliver core.
+			 */
+			if (cur_cls == 0 && topology_physical_package_id(iter_cpu) > 0 &&
+				(is_task_util_over(iter_task, BOOST_THRESHOLD_UNIT) || get_task_cls_for_scene(iter_task) > 0)) {
 				rq_unlock(iter_rq, &rf);
 				continue;
 			}
@@ -2883,14 +2917,6 @@ static struct task_struct *oplus_pick_runnable_rt_boost(
 	spin_lock_irqsave(&rbt_lock, irqflag);
 
 	/*
-	 * no task in the rt_boost group.
-	 */
-	if (!has_rt_boost_tasks()) {
-		spin_unlock_irqrestore(&rbt_lock, irqflag);
-		return NULL;
-	}
-
-	/*
 	 * Check all tasks in the rt_boost group in turn according to
 	 * the priority obtained from the im_flag mapping relationship.
 	 */
@@ -2989,13 +3015,6 @@ static struct task_struct *oplus_pick_runnable_rt_normal(
 	u64 runnable_time, threshold_time = ULLONG_MAX;
 
 	/*
-	 * Skip if there is no normal_rt task in the runnable
-	 * state on this cpu.
-	 */
-	if (!has_runnable_rt_tasks(src_rq))
-		return NULL;
-
-	/*
 	 * Check the RT threads in the runnable state on this CPU one by one.
 	 */
 	plist_for_each_entry(p, head, pushable_tasks) {
@@ -3016,16 +3035,14 @@ static struct task_struct *oplus_pick_runnable_rt_normal(
 		 * The system may crash because the two variables pus_ptr
 		 * and cpus_mask are not equal.
 		 */
-		if (!cpumask_test_cpu(dst_cpu, p->cpus_ptr)) {
+		if (!cpumask_test_cpu(dst_cpu, p->cpus_ptr))
 			continue;
-		}
 
 		/*
 		 * Skip the rt_boost task.
 		 */
-		if (task_is_rt_boost(p)) {
+		if (task_is_rt_boost(p))
 			continue;
-		}
 
 		/*
 		 * Whether the runnable time of the normal_rt task exceeds
@@ -3037,9 +3054,8 @@ static struct task_struct *oplus_pick_runnable_rt_normal(
 		 */
 		threshold_time = get_threshold_time(normal_rt_runnable);
 		runnable_time = oplus_get_runnable_time_for_rt(src_cpu, p);
-		if (runnable_time < threshold_time) {
+		if (runnable_time < threshold_time)
 			continue;
-		}
 
 #ifdef DEBUG_LB_NEWIDLE
 		trace_printk("DEBUG_LB_NEWIDLE[%d]: task=%s$%d$%d, "
@@ -3071,7 +3087,6 @@ static bool oplus_newidle_balance_pull_runnable_rt_boost(
 	cpumask_t search_cpus = CPU_MASK_NONE;
 	struct rq *rq = NULL;
 	struct rq *busiest_rq = NULL;
-	struct oplus_rq *orq = NULL;
 	struct task_struct *rt_task = NULL;
 	int this_cpu = cpu_of(this_rq);
 	int cpu = -1;
@@ -3097,7 +3112,6 @@ static bool oplus_newidle_balance_pull_runnable_rt_boost(
 
 		for_each_cpu(cpu, &search_cpus) {
 			rq = cpu_rq(cpu);
-			orq = (struct oplus_rq *) rq->android_oem_data1;
 
 			/*
 			 * Cannot migrate to itself.
@@ -3118,9 +3132,37 @@ static bool oplus_newidle_balance_pull_runnable_rt_boost(
 
 			busiest_cpu = cpu;
 			busiest_rq = cpu_rq(busiest_cpu);
-			double_lock_balance(this_rq, busiest_rq);
 
 			/*
+			 * fast check condition
+			 * Skip if there is no rt task in the runnable state on this cpu.
+			 */
+			if (!has_runnable_rt_tasks(busiest_rq))
+				continue;
+
+			/*
+			 * fast check condition
+			 * Skip if there is no rt_boost task in the runnable state on this cpu.
+			 */
+			if (!has_rt_boost_tasks())
+				continue;
+
+			/*
+			 * The 'double_lock_balance' will lock two 'rq', especially in the scheduler
+			 * where the competition for the 'rq' lock is very intense and time-consuming.
+			 * Therefore, please move the judgment conditions for early exits before 'double_lock_balance'
+			 * as much as possible to reduce the overhead of immediately unlocking and exiting after 'double_lock_balance'.
+			 */
+			double_lock_balance(this_rq, busiest_rq);
+
+			/* The previous fast check didn't hold the lock, so check again after holding the lock. */
+			if (sched_rt_runnable(this_rq)) {
+				double_unlock_balance(this_rq, busiest_rq);
+				return false;
+			}
+
+			/*
+			 * The previous fast check didn't hold the lock, so check again after holding the lock.
 			 * Skip if there is no rt task in the runnable state on this cpu.
 			 */
 			if (!has_runnable_rt_tasks(busiest_rq)) {
@@ -3129,6 +3171,7 @@ static bool oplus_newidle_balance_pull_runnable_rt_boost(
 			}
 
 			/*
+			 * The previous fast check didn't hold the lock, so check again after holding the lock.
 			 * Skip if there is no rt_boost task in the runnable state on this cpu.
 			 */
 			if (!has_rt_boost_tasks()) {
@@ -3193,7 +3236,6 @@ static bool oplus_newidle_balance_pull_runnable_rt_normal(
 	cpumask_t search_cpus = CPU_MASK_NONE;
 	struct rq *rq = NULL;
 	struct rq *busiest_rq = NULL;
-	struct oplus_rq *orq = NULL;
 	struct task_struct *rt_task = NULL;
 	int this_cpu = cpu_of(this_rq);
 	int cpu = -1, busiest_cpu = -1;
@@ -3222,7 +3264,6 @@ static bool oplus_newidle_balance_pull_runnable_rt_normal(
 
 		for_each_cpu(cpu, &search_cpus) {
 			rq = cpu_rq(cpu);
-			orq = (struct oplus_rq *) rq->android_oem_data1;
 
 			/*
 			 * Cannot migrate to itself.
@@ -3244,7 +3285,36 @@ static bool oplus_newidle_balance_pull_runnable_rt_normal(
 			/* got it! */
 			busiest_cpu = cpu;
 			busiest_rq = cpu_rq(busiest_cpu);
+
+			/*
+			 * fast check condition
+			 * Skip if there is no rt task in the runnable state on this cpu.
+			 */
+			if (!has_runnable_rt_tasks(busiest_rq))
+				continue;
+
+			/*
+			 * The 'double_lock_balance' will lock two 'rq', especially in the scheduler
+			 * where the competition for the 'rq' lock is very intense and time-consuming.
+			 * Therefore, please move the judgment conditions for early exits before 'double_lock_balance'
+			 * as much as possible to reduce the overhead of immediately unlocking and exiting after 'double_lock_balance'.
+			 */
 			double_lock_balance(this_rq, busiest_rq);
+
+			/* The previous fast check didn't hold the lock, so check again after holding the lock. */
+			if (sched_rt_runnable(this_rq)) {
+				double_unlock_balance(this_rq, busiest_rq);
+				return false;
+			}
+
+			/*
+			 * The previous fast check didn't hold the lock, so check again after holding the lock.
+			 * Skip if there is no rt task in the runnable state on this cpu.
+			 */
+			if (!has_runnable_rt_tasks(busiest_rq)) {
+				double_unlock_balance(this_rq, busiest_rq);
+				continue;
+			}
 
 			/*
 			 * pick an rt task that is in the runnable state
@@ -3337,9 +3407,23 @@ static bool oplus_newidle_balance_pull_runnable_ux(
 
 			busiest_cpu = cpu;
 			busiest_rq = cpu_rq(busiest_cpu);
+			/*
+			 * fast check condition
+			 * Skip if there is no ux task on this cpu.
+			 */
+			if (!orq_has_ux_tasks(orq))
+				continue;
+
+			/*
+			 * The 'double_lock_balance' will lock two 'rq', especially in the scheduler
+			 * where the competition for the 'rq' lock is very intense and time-consuming.
+			 * Therefore, please move the judgment conditions for early exits before 'double_lock_balance'
+			 * as much as possible to reduce the overhead of immediately unlocking and exiting after 'double_lock_balance'.
+			 */
 			double_lock_balance(this_rq, busiest_rq);
 
 			/*
+			 * The previous fast check didn't hold the lock, so check again after holding the lock.
 			 * Skip if there is no ux task on this cpu.
 			 */
 			if (!orq_has_ux_tasks(orq)) {
@@ -4275,7 +4359,7 @@ static void ut_calc_order_idx(void)
 				"migr_type=%d, cur_cls=%d, "
 				"order_idx=%d, walk_cnt=%d\n",
 				__LINE__, (int)ret, type, cur_cls,
-				ret?order_idx:-1, ret?walk_cnt:-1);
+				ret ? order_idx : -1, ret ? walk_cnt : -1);
 		}
 	}
 }

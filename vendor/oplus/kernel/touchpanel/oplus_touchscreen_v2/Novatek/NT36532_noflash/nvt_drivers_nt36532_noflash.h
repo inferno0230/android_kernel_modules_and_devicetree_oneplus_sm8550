@@ -261,6 +261,7 @@ struct nvt_ts_mem_map {
 	uint32_t BOOT_RDY_ADDR;
 	uint32_t POR_CD_ADDR;
 	uint32_t TX_AUTO_COPY_EN;
+	uint32_t ACI_ERR_CLR_ADDR;
 	uint32_t SPI_DMA_TX_INFO;
 	/* BLD CRC */
 	uint32_t BLD_LENGTH_ADDR;
@@ -276,6 +277,7 @@ struct nvt_ts_mem_map {
 	uint32_t DMA_CRC_EN_ADDR;
 	uint32_t BLD_ILM_DLM_CRC_ADDR;
 	uint32_t DMA_CRC_FLAG_ADDR;
+	uint32_t SPI_DMA_VAL_ADDR;
 	uint32_t DOZE_GM_S1D_SCAN_RAW_ADDR;
 	uint32_t DOZE_GM_BTN_SCAN_RAW_ADDR;
 };
@@ -348,6 +350,7 @@ struct chip_data_nt36523 {
 	uint8_t                         recovery_cnt;
 	uint8_t                         ilm_dlm_num;
 	uint8_t                         cascade_2nd_header_info;
+	uint8_t                         spi_dma_div_cnt_val;
 	uint8_t                         enb_casc;
 	uint8_t                         *fwbuf;
 	uint8_t                         hw_crc;

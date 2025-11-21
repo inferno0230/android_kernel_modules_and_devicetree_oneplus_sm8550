@@ -3580,6 +3580,90 @@ out:
 	mutex_unlock(&chip_info->touch_mutex);
 }
 
+/*game_hot_ilitek*/
+static void ilitek_aiunit_game_info(void *chip_data)
+{
+	struct ilitek_ts_data *chip_info = (struct ilitek_ts_data *)chip_data;
+	u8 cmd[105];
+	int index = 0;
+	int i;
+	int ret = 0;
+	if (chip_info == NULL || chip_info->ts == NULL) {
+		ILI_ERR("chip_info=NULL\n");
+		return;
+	}
+
+	if (chip_info->ts->is_suspended) {
+		ILI_ERR("TP in suspend\n");
+		return;
+	}
+	mutex_lock(&chip_info->touch_mutex);
+	memset(cmd, 0xFF, sizeof(cmd));
+
+	/*CMD and SubCMD*/
+	cmd[index++] = GAME_AIUINIT_CMD;
+	cmd[index++] = GAME_AIUINIT_SUBCMD;
+	if (chip_info->ts->aiunit_game_enable) {
+	/*Gaming Zone On/Off*/
+	cmd[index++] = 0x01;
+	} else {
+	cmd[index++] = 0x00;
+	}
+	/*Reserved*/
+	cmd[index++] = 0xFF;
+	cmd[index++] = 0xFF;
+
+	for (i = 0 ; i < MAX_AIUNIT_SET_NUM; i++) {
+			/*gameType*/
+			cmd[index++] = chip_info->ts->tp_ic_aiunit_game_info[i].gametype;
+			/*aiUnitGameType*/
+			cmd[index++] = chip_info->ts->tp_ic_aiunit_game_info[i].aiunit_game_type;
+
+			/*Left-Up X-coordinate (High Byte)*/
+			cmd[index++] = chip_info->ts->tp_ic_aiunit_game_info[i].left >> 8;
+			/*Left-Up X-coordinate (Low Byte)*/
+			cmd[index++] = chip_info->ts->tp_ic_aiunit_game_info[i].left & 0xFF;
+
+			/*Left-Up Y-coordinate (High Byte)*/
+			cmd[index++] = chip_info->ts->tp_ic_aiunit_game_info[i].top >> 8;
+			/*Left-Up Y-coordinate (Low Byte)*/
+			cmd[index++] = chip_info->ts->tp_ic_aiunit_game_info[i].top & 0xFF;
+
+			/*Right-Bottom X-coordinate (High Byte)*/
+			cmd[index++] = chip_info->ts->tp_ic_aiunit_game_info[i].right >> 8;
+			/*Right-Bottom X-coordinate (Low Byte)*/
+			cmd[index++] = chip_info->ts->tp_ic_aiunit_game_info[i].right & 0xFF;
+
+			/*Right-Bottom Y-coordinate (High Byte)*/
+			cmd[index++] = chip_info->ts->tp_ic_aiunit_game_info[i].bottom >> 8;
+			/*Right-Bottom Y-coordinate (Low Byte)*/
+			cmd[index++] = chip_info->ts->tp_ic_aiunit_game_info[i].bottom & 0xFF;
+	}
+	ILI_DBG("\n");
+
+	ILI_DBG("Cmd ID:              %02X\n", cmd[0]);
+	ILI_DBG("SubCmd:              %02X\n", cmd[1]);
+	ILI_DBG("Gaming Zone On/Off:  %02X\n", cmd[2]);
+	ILI_DBG("Reserved:            %02X\n", cmd[3]);
+	ILI_DBG("Reserved:            %02X\n", cmd[4]);
+	ILI_DBG("\n");
+	for (i = 5; i < sizeof(cmd); i += 10) {
+		ILI_DBG("Game Type:         %02X\n", cmd[i]);
+		ILI_DBG("AiunitGameType:    %02X\n", cmd[i + 1]);
+		ILI_DBG("Left-Up X:         %04X\n", ((cmd[i + 2] << 8) | cmd[i + 3]));
+		ILI_DBG("Left-Up Y:         %04X\n", ((cmd[i + 4] << 8) | cmd[i + 5]));
+		ILI_DBG("Right-Bottom X:    %04X\n", ((cmd[i + 6] << 8) | cmd[i + 7]));
+		ILI_DBG("Right-Bottom Y:    %04X\n", ((cmd[i + 8] << 8) | cmd[i + 9]));
+		ILI_DBG("\n");
+	}
+	ret = ilits->wrapper(cmd, sizeof(cmd), NULL, 0, OFF, OFF);
+
+	if (ret < 0) {
+		ILI_ERR("cmd fail\n");
+	}
+	mutex_unlock(&chip_info->touch_mutex);
+}
+
 static struct oplus_touchpanel_operations ilitek_ops = {
 	.ftm_process                = ilitek_ftm_process,
 	.ftm_process_extra          = ilitek_ftm_process_extra,
@@ -3605,6 +3689,7 @@ static struct oplus_touchpanel_operations ilitek_ops = {
 	.get_water_mode             = ilitek_read_water_flag,
 	.force_water_mode           = ilitek_force_water_mode,
 	.get_glove_mode             = ilitek_getglove_mode_status,
+	.aiunit_game_info           = ilitek_aiunit_game_info,
 };
 
 static int ilitek_read_debug_data(struct seq_file *s,
@@ -3612,6 +3697,9 @@ static int ilitek_read_debug_data(struct seq_file *s,
 				  u8 read_type)
 {
 	int ret;
+	u8 checksum = 0, pack_checksum = 0;
+	int tmp = ili_debug_en, retry = 3;
+	int time_out = 0, data_time_out = 50;
 	u8 test_cmd[4] = { 0 };
 	int i = 0;
 	int j = 0;
@@ -3626,49 +3714,73 @@ static int ilitek_read_debug_data(struct seq_file *s,
 	}
 
 	mutex_lock(&ilits->touch_mutex);
-	ret = ili_set_tp_data_len(DATA_FORMAT_DEBUG, false, NULL);
+	do {
+		if (ilits->tp_suspend) {
+		ret = ili_set_tp_data_len(DATA_FORMAT_GESTURE_DEBUG, false, NULL);
 
-	if (ret < 0) {
-		ILI_ERR("Failed to switch debug mode\n");
-		seq_printf(s, "get data failed\n");
-		mutex_unlock(&ilits->touch_mutex);
-		ili_kfree((void **)&buf);
-		return -1;
-	}
-
-	test_cmd[0] = 0xFA;
-	test_cmd[1] = read_type;
-	ILI_INFO("debug cmd 0x%X, 0x%X", test_cmd[0], test_cmd[1]);
-	ret = ilits->wrapper(test_cmd, 2, NULL, 0, ON, OFF);
-	atomic_set(&ilits->cmd_int_check, ENABLE);
-	enable_irq(ilits->irq_num);/*because oplus disable*/
-
-	for (i = 0; i < 10; i++) {
-		int rlen = 0;
-		ret = ilits->detect_int_stat(false);
-		rlen = ilits->tp_data_len;
-		ILI_INFO("Packget length = %d\n", rlen);
-		ret = ilits->wrapper(NULL, 0, buf, rlen, OFF, OFF);
-
-		if (ret < 0 || rlen < 0 || rlen >= TR_BUF_SIZE) {
-			ILI_ERR("Length of packet is invaild\n");
-			continue;
+		ILI_INFO("switch format = DATA_FORMAT_GESTURE_DEBUG\n");
+		} else {
+			ret = ili_set_tp_data_len(DATA_FORMAT_DEBUG, false, NULL);
 		}
 
-		if (ilits->position_high_resolution == OFF) {
-	        if (buf[0] == P5_X_DEBUG_PACKET_ID) {
-	            break;
-	        }
-		} else {
-	        if (buf[0] == P5_X_DEBUG_HIGH_RESOLUTION_PACKET_ID) {
-	            break;
-	        }
+		if (ret < 0) {
+			ILI_ERR("Failed to switch debug mode\n");
+			seq_printf(s, "get data failed\n");
+			mutex_unlock(&ilits->touch_mutex);
+			ili_kfree((void **)&buf);
+			return -1;
+		}
+
+		test_cmd[0] = 0xFA;
+		test_cmd[1] = read_type;
+		ILI_INFO("debug cmd 0x%X, 0x%X", test_cmd[0], test_cmd[1]);
+		ret = ilits->wrapper(test_cmd, 2, NULL, 0, ON, OFF);
+		atomic_set(&ilits->cmd_int_check, ENABLE);
+		enable_irq(ilits->irq_num);/*because oplus disable*/
+		time_out = ilits->wait_int_timeout;
+		ilits->wait_int_timeout = data_time_out;
+
+		for (i = 0; i < 10; i++) {
+			int rlen = 0;
+			ret = ilits->detect_int_stat(false);
+			rlen = ilits->tp_data_len;
+			ILI_INFO("Packget length = %d\n", rlen);
+			ret = ilits->wrapper(NULL, 0, buf, rlen, OFF, OFF);
+
+			if (ret < 0 || rlen < 0 || rlen >= TR_BUF_SIZE) {
+				ILI_ERR("Length of packet is invaild\n");
+				continue;
+			}
+
+			checksum = ili_calc_packet_checksum(buf, rlen - 1);
+			pack_checksum = buf[rlen - 1];
+			ILI_INFO("Packet ID = %x\n", buf[0]);
+
+			if (checksum != pack_checksum) {
+				ILI_ERR("Checksum Error (0x%X)! Pack = 0x%X, len = %d\n", checksum, pack_checksum, rlen);
+				ili_debug_en = DEBUG_ALL;
+				ili_dump_data(buf, 8, rlen, 0, "debug data with wrong");
+				ili_debug_en = tmp;
+				continue;
+			}
+
+			ilits->wait_int_timeout = time_out;
+			if (ilits->position_high_resolution == OFF) {
+				if (buf[0] == P5_X_DEBUG_PACKET_ID) {
+					break;
+				}
+			} else {
+				if (buf[0] == P5_X_DEBUG_HIGH_RESOLUTION_PACKET_ID) {
+					break;
+				}
+			}
 		}
 
 		atomic_set(&ilits->cmd_int_check, DISABLE);
-	}
+		disable_irq_nosync(ilits->irq_num);
+		mdelay(10);
 
-	disable_irq_nosync(ilits->irq_num);
+	} while (--retry > 0);
 
 	switch (read_type) {
 	case P5_X_FW_RAW_DATA_MODE:
@@ -3685,23 +3797,6 @@ static int ilitek_read_debug_data(struct seq_file *s,
 	}
 
 	if (i < 10) {
-		for (i = 0; i < ych; i++) {
-			seq_printf(s, "[%2d]", i);
-
-			for (j = 0; j < xch; j++) {
-				s16 temp;
-				if (ilits->position_high_resolution == OFF) {
-	                temp = (s16)((buf[(i * xch + j) * 2 + 35] << 8)
-	                             + buf[(i * xch + j) * 2 + 35 + 1]);
-				} else {
-	                temp = (s16)((buf[(i * xch + j) * 2 + 45] << 8)
-	                             + buf[(i * xch + j) * 2 + 45 + 1]);
-				}
-				seq_printf(s, "%5d,", temp);
-			}
-
-			seq_printf(s, "\n");
-		}
 		if (ilits->position_high_resolution == OFF) {
 			offset_len = 35;
 		} else {
@@ -3711,6 +3806,24 @@ static int ilitek_read_debug_data(struct seq_file *s,
 		if ((ilits->rib.nReportResolutionMode == POSITION_DIFFER_HIGH_RESOLUTION)
 			|| (ilits->rib.nReportResolutionMode == POSITION_DIFFER_LOW_RESOLUTION)) {
 			offset_len += 10;
+		}
+
+		for (i = 0; i < ych; i++) {
+			seq_printf(s, "[%2d]", i);
+
+			for (j = 0; j < xch; j++) {
+				s16 temp;
+				if (ilits->position_high_resolution == OFF) {
+					temp = (s16)((buf[(i * xch + j) * 2 + offset_len] << 8)
+								 + buf[(i * xch + j) * 2 + offset_len + 1]);
+				} else {
+					temp = (s16)((buf[(i * xch + j) * 2 + offset_len] << 8)
+								 + buf[(i * xch + j) * 2 + offset_len + 1]);
+				}
+				seq_printf(s, "%5d,", temp);
+			}
+
+			seq_printf(s, "\n");
 		}
 
 		seq_printf(s, "Y Data:");
@@ -3760,29 +3873,44 @@ static int ilitek_read_debug_data(struct seq_file *s,
 		seq_printf(s, "get data failed\n");
 	}
 
-	/* change to demo mode */
-	if (ilits->differ_mode) {
-		if (ili_set_tp_data_len(DATA_FORMAT_DEBUG, false, NULL) < 0) {
-			ILI_ERR("Failed to switch debug mode\n");
-		}
-		if (ilits->wrapper(open_differ_cmd, 2, NULL, 0, ON, OFF) < 0) {
-			ILI_ERR("switch ilitek diff mode fail\n");
+	if (ilits->tp_suspend) {
+		test_cmd[0] = 0xF0;
+		test_cmd[1] = 0x00;
+		ILI_INFO("demo cmd 0x%X, 0x%X\n", test_cmd[0], test_cmd[1]);
+
+		ret = ilits->wrapper(test_cmd, 2, NULL, 0, OFF, OFF);
+
+		ilits->tp_data_format = DATA_FORMAT_GESTURE_DEMO;
+
+		if (ilits->position_high_resolution == OFF) {
+			ilits->tp_data_len = P5_X_GESTURE_INFO_LENGTH;
+		} else {
+			ilits->tp_data_len = P5_X_GESTURE_INFO_LENGTH_HIGH_RESOLUTION;
 		}
 	} else {
-		if (ili_set_tp_data_len(DATA_FORMAT_DEMO, false, NULL) < 0) {
-			ILI_ERR("Failed to set tp data length\n");
+		/* change to demo mode */
+		if (ilits->differ_mode) {
+			if (ili_set_tp_data_len(DATA_FORMAT_DEBUG, false, NULL) < 0) {
+				ILI_ERR("Failed to switch debug mode\n");
+			}
+			if (ilits->wrapper(open_differ_cmd, 2, NULL, 0, ON, OFF) < 0) {
+				ILI_ERR("switch ilitek diff mode fail\n");
+			}
+		} else {
+			if (ili_set_tp_data_len(DATA_FORMAT_DEMO, false, NULL) < 0) {
+				ILI_ERR("Failed to set tp data length\n");
+			}
 		}
 	}
-
 	mutex_unlock(&ilits->touch_mutex);
 	return 0;
 }
 
-static void ilitek_tp_limit_data_write(void *chip_data, int count)
+static void ilitek_tp_data_record_write(void *chip_data, int count)
 {
 	int ret = 0;
 
-	ILI_INFO("tp_limit_data_write:%d \n", count);
+	ILI_INFO("ilitek_tp_data_record_write:%d \n", count);
 
 	if (count < 0) {
 		ILI_ERR("count is error %d", count);
@@ -3919,7 +4047,7 @@ static struct debug_info_proc_operations ilitek_debug_info_proc_ops = {
 	.baseline_read = ilitek_baseline_read,
 	.delta_read = ilitek_delta_read,
 	.main_register_read = ilitek_main_register_read,
-	.tp_limit_data_write    = ilitek_tp_limit_data_write,
+	.tp_data_record_write    = ilitek_tp_data_record_write,
 };
 
 

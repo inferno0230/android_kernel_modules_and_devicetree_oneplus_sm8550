@@ -3852,8 +3852,8 @@ static void sde_encoder_underrun_callback(struct drm_encoder *drm_enc,
 	SDE_ATRACE_END("encoder_underrun_callback");
 
 #ifdef OPLUS_FEATURE_DISPLAY
-	SDE_MM_ERROR("DisplayDriverID@@422$$sde encoder underrun callback! Count=%d",
-			atomic_read(&phy_enc->underrun_cnt));
+	EXCEPTION_TRACKPOINT_REPORT("DisplayDriverID@@%d$$sde encoder underrun callback! Count=%d",
+			OPLUS_DISP_Q_ERROR_UNDERRUN, atomic_read(&phy_enc->underrun_cnt));
 	if (get_eng_version() == AGING) {
 		SDE_DBG_DUMP(SDE_DBG_BUILT_IN_ALL, "panic");
 	}
@@ -4166,8 +4166,18 @@ static inline void _sde_encoder_trigger_start(struct sde_encoder_phys *phys)
 		return;
 	}
 
+#ifdef OPLUS_FEATURE_DISPLAY
+	if (phys->ops.trigger_start && phys->enable_state != SDE_ENC_DISABLED) {
+		/* sending commands asynchronously, it is necessary to ensure that
+		the next frame mipi sends the image */
+		oplus_panel_send_asynchronous_cmd();
+		phys->ops.trigger_start(phys);
+	}
+#else
 	if (phys->ops.trigger_start && phys->enable_state != SDE_ENC_DISABLED)
 		phys->ops.trigger_start(phys);
+#endif
+
 }
 
 void sde_encoder_helper_trigger_flush(struct sde_encoder_phys *phys_enc)
@@ -5535,6 +5545,7 @@ void sde_encoder_kickoff(struct drm_encoder *drm_enc, bool config_changed)
 		oplus_ofp_hbm_handle(sde_enc);
 		oplus_ofp_aod_off_backlight_recovery(sde_enc);
 		oplus_ofp_ultra_low_power_aod_update(sde_enc);
+		oplus_ofp_video_mode_aod_handle(sde_enc);
 	}
 #endif /* OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT */
 

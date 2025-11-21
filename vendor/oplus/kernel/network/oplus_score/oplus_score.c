@@ -1291,8 +1291,11 @@ static void oplus_score_netlink_exit(void)
 {
 	genl_unregister_family(&oplus_score_genl_family);
 }
-
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0))
+static int proc_set_test_foreground_uid(const struct ctl_table *ctl, int write, void __user *buffer, size_t *lenp, loff_t *ppos)
+#else
 static int proc_set_test_foreground_uid(struct ctl_table *ctl, int write, void __user *buffer, size_t *lenp, loff_t *ppos)
+#endif
 {
 	int ret;
 	u32 data[3];
@@ -1310,8 +1313,11 @@ static int proc_set_test_foreground_uid(struct ctl_table *ctl, int write, void _
 
 	return ret;
 }
-
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0))
+static int proc_set_test_link_index(const struct ctl_table *ctl, int write, void __user *buffer, size_t *lenp, loff_t *ppos)
+#else
 static int proc_set_test_link_index(struct ctl_table *ctl, int write, void __user *buffer, size_t *lenp, loff_t *ppos)
+#endif
 {
 	int ret;
 	u32 data[2];
@@ -1378,8 +1384,12 @@ static struct ctl_table oplus_score_sysctl_table[] =
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= proc_set_test_link_index,
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0))
+	}
+#else
 	},
-	{ }
+	{}
+#endif
 };
 
 static int oplus_score_sysctl_init(void)

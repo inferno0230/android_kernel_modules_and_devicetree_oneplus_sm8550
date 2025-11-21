@@ -40,7 +40,7 @@
 #ifndef PF__HOLE__20000000
 #define PF__HOLE__20000000 0x20000000
 #endif
-#define PF_BYPASS_SHRINK_SLAB PF__HOLE__20000000
+#define PF_IN_FORCE_SHRINK_CONTEXT PF__HOLE__20000000
 
 enum {
 	HS_LOG_ERR = 0,
@@ -513,7 +513,10 @@ extern void memcg_app_score_resort(void);
 extern unsigned long memcg_anon_pages(struct mem_cgroup *memcg);
 
 #ifdef CONFIG_HYBRIDSWAP_CORE
+#define NANDSWAPV2 "/dev/block/by-name/hybridswap"
+#define NANDSWAPV2_CRYPTO "/dev/block/mapper/hybridswap_crypto"
 extern bool hybridswap_core_enabled(void);
+extern bool nandswapV2_supported(void);
 extern bool hybridswap_reclaim_in_enable(void);
 extern void hybridswap_mem_cgroup_deinit(struct mem_cgroup *memcg);
 extern unsigned long hybridswap_reclaim_in(unsigned long size);
@@ -524,7 +527,7 @@ extern unsigned long zram_zsmalloc(struct zs_pool *zs_pool,
 extern struct task_struct *get_task_from_proc(struct inode *inode);
 extern unsigned long long hybridswap_read_zram_pagefault(void);
 extern bool is_hybridswap_reclaim_work_running(void);
-extern void hybridswap_force_reclaim(struct mem_cgroup *mcg);
+extern void hybridswap_force_reclaim(struct mem_cgroup *mcg, s64 val);
 extern bool hybridswap_stored_wm_ok(void);
 extern void mem_cgroup_id_remove_hook(void *data, struct mem_cgroup *memcg);
 extern int mem_cgroup_stored_wm_ratio_write(
@@ -567,7 +570,7 @@ struct hybridswapd_operations {
 	atomic_long_t *fault_out_pause_cnt;
 	atomic_t *swapd_pause;
 
-	void (*pre_init)(void);
+	int (*pre_init)(void);
 	void (*pre_deinit)(void);
 
 	int (*init)(struct zram **zram);
@@ -594,7 +597,12 @@ struct hybridswapd_operations {
 extern struct hybridswapd_operations *hybridswapd_ops;
 
 extern void hybridswapd_ops_init(struct hybridswapd_operations *ops);
-extern void hybridswapd_chp_ops_init(struct hybridswapd_operations *ops);
+
+/* ezr need this symbols */
+inline u64 get_zram_wm_ratio_value(void);
+void update_swapd_memcg_param(struct mem_cgroup *memcg);
+bool free_zram_is_ok(void);
+extern atomic_t ezreclaimable_nr;
 #else
 static inline bool hybridswap_swapd_enabled(void) { return false; }
 #endif
@@ -602,4 +610,15 @@ static inline bool hybridswap_swapd_enabled(void) { return false; }
 extern void should_shrink_async(void *data, gfp_t gfp_mask, int nid,
 			struct mem_cgroup *memcg, int priority, bool *bypass);
 
+extern atomic_t display_off;
+extern struct zram *swapd_zram;
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_OSVELTE) && IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_EZRECLAIMD)
+extern void ezr_ops_init(struct hybridswapd_operations *ops);
+extern bool ezreclaimd_enable;
+extern int __nocfi ezr_read_symbols_address(void);
+#endif /* CONFIG_OPLUS_FEATURE_MM_OSVELTE && CONFIG_OPLUS_FEATURE_MM_EZRECLAIMD */
+
+void register_panel_event_notifier(void);
+void unregister_panel_event_notifier(void);
 #endif /* end of HYBRIDSWAP_INTERNAL_H */

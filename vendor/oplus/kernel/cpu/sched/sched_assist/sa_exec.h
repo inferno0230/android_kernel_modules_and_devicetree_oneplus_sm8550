@@ -7,6 +7,6 @@
 #ifndef _OPLUS_SA_EXEC_H_
 #define _OPLUS_SA_EXEC_H_
 
-extern void task_rename_handler(void *unused, struct task_struct *tsk, const char *buf);
+void task_rename_handler(void *unused, struct task_struct *tsk, const char *comm);
 
 #endif /* _OPLUS_SA_EXEC_H_ */

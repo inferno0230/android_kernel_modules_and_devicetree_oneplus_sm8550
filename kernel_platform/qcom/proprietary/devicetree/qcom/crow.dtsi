@@ -55,6 +55,7 @@
 		ufshc1 = &ufshc_mem; /* Embedded UFS Slot */
 		mmc1 = &sdhc_2; /* SDC2 SD card slot */
 		hsuart0 = &qupv3_se10_4uart;
+		hsuart5 = &qupv3_se4_2uart;
 	};
 
 	sram: sram@17D09400 {

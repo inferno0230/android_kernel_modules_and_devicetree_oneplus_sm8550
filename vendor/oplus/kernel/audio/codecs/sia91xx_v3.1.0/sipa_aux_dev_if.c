@@ -310,7 +310,7 @@ int soc_aux_deinit_only_sipa81xx(
 EXPORT_SYMBOL(soc_aux_deinit_only_sipa81xx);
 
 
-int soc_sia91xx_init(
+int soc_sia91xx_v3_init(
 	struct platform_device *pdev,
 	struct snd_soc_codec_conf *codec_conf,
 	u32 conf_num)
@@ -372,9 +372,9 @@ int soc_sia91xx_init(
 
 	return 0;
 }
-EXPORT_SYMBOL(soc_sia91xx_init);
+EXPORT_SYMBOL(soc_sia91xx_v3_init);
 
-int soc_codec_conf_sia91xx(
+int soc_codec_conf_sia91xx_v3(
 	struct platform_device *pdev,
 	struct snd_soc_card *card)
 {
@@ -383,6 +383,9 @@ int soc_codec_conf_sia91xx(
 	struct snd_soc_codec_conf *codec_conf = NULL;
 
 	conf_num = soc_sipa81xx_get_codec_conf_num(pdev);
+	if (conf_num == 0) {
+		return ret;
+	}
 
 	codec_conf = devm_kzalloc(card->dev,
 					conf_num * sizeof(struct snd_soc_codec_conf),
@@ -390,9 +393,9 @@ int soc_codec_conf_sia91xx(
 	if (NULL == codec_conf)
 		return -ENOMEM;
 
-	ret = soc_sia91xx_init(pdev, codec_conf, conf_num);
+	ret = soc_sia91xx_v3_init(pdev, codec_conf, conf_num);
 	if (0 != ret) {
-		pr_err("[  err][%s] : soc_sia91xx_init ret = %d !!! \r\n",
+		pr_err("[  err][%s] : soc_sia91xx_v3_init ret = %d !!! \r\n",
 			__func__, ret);
 		return ret;
 	}
@@ -402,4 +405,27 @@ int soc_codec_conf_sia91xx(
 
 	return 0;
 }
-EXPORT_SYMBOL(soc_codec_conf_sia91xx);
+EXPORT_SYMBOL(soc_codec_conf_sia91xx_v3);
+
+int soc_codec_conf_sipa(
+	struct platform_device *pdev,
+	struct snd_soc_card *card) {
+
+	int ret = 0;
+	u32 is_digital_pa = 0;
+
+	ret = of_property_read_u32(pdev->dev.of_node,
+				"si,is_digital_pa", &is_digital_pa);
+	if (0 != ret) {
+		pr_info("[ info][%s] : node is not exist. ret = %d !!! \r\n", __func__, ret);
+	}
+
+	if (is_digital_pa) {
+		ret = soc_codec_conf_sia91xx_v3(pdev, card);
+	} else {
+		ret = soc_aux_init_only_sipa81xx(pdev, card);
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL(soc_codec_conf_sipa);

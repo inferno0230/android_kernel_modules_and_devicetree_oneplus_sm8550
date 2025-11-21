@@ -25,6 +25,7 @@ static int __init game_ctrl_init(void)
 	task_util_init();
 	rt_info_init();
 	fake_cpufreq_init();
+	debug_init();
 
 	return 0;
 }

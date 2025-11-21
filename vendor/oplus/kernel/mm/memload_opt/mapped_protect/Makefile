@@ -6,3 +6,5 @@ LINUXINCLUDE += -I$(srctree)/
 obj-$(CONFIG_MAPPED_PROTECT) += oplus_bsp_mapped_protect.o
 
 oplus_bsp_mapped_protect-y := mapped_protect.o
+
+oplus_bsp_mapped_protect-$(CONFIG_OPLUS_SMART_STORAGE) += level_protect.o

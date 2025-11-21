@@ -526,12 +526,8 @@ void android_vh_sched_stat_runtime_handler(void *unused, struct task_struct *tas
 		ots->vruntime += calc_delta_fair(delta, ots->ux_priority);
 		limit = ux_task_exec_limit(task);
 		if (ots->total_exec >= limit) {
-			/*TODO: The cfs vruntime(sched_entity->vruntime) of task accumulates when task is running as ux.
-			 *And when removed from the ux list, task is still runnable.
-			 *Its vruntime is much bigger than other tasks in cfs rbtree,
-			 *So it waits a lot and makes up for the executed vruntime.
-			 *No vendor hook can fix this now.
-			 */
+			/* make up task vruntime for swift task */
+			make_up_task_vruntime(task, ots);
 			update_ux_timeline_task_removal(orq, ots);
 			put_task_struct(task);
 		} else {
@@ -540,4 +536,41 @@ void android_vh_sched_stat_runtime_handler(void *unused, struct task_struct *tas
 		}
 	}
 	spin_unlock_irqrestore(orq->ux_list_lock, irqflag);
+}
+
+inline void save_task_vruntime_delta(struct task_struct *task, struct oplus_task_struct *ots)
+{
+	/* ux type is swift, save current vruntime delta */
+	if (ots->ux_state & SA_TYPE_SWIFT) {
+		u64 min_vruntime;
+		u64 vruntime;
+
+		/* if task migrated, don't calculate delta again */
+		if (ots->cfs_delta < 0) {
+			min_vruntime = task->se.cfs_rq->min_vruntime;
+			vruntime = task->se.vruntime;
+			ots->cfs_delta = (s64)(vruntime - min_vruntime);
+			if (ots->cfs_delta < 0) {
+				ots->cfs_delta = 0;
+			}
+		}
+	} else if (ots->cfs_delta != -1) {
+		ots->cfs_delta = -1;
+	}
+}
+
+inline void make_up_task_vruntime(struct task_struct *task, struct oplus_task_struct *ots)
+{
+	if (ots->cfs_delta == -1) {
+		return;
+	}
+
+	if (ots->ux_state & SA_TYPE_SWIFT) {
+		if (ots->cfs_delta >= 0) {
+			/* restore task's vruntime delta to original, steal exec time for this task */
+			task->se.vruntime = task->se.cfs_rq->min_vruntime + ots->cfs_delta;
+		}
+	}
+
+	ots->cfs_delta = -1;
 }

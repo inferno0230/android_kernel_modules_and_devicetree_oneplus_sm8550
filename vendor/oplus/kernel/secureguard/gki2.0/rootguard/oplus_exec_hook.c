@@ -86,9 +86,9 @@ static void oplus_report_execveat(const char *path, const char* dcs_event_id)
 
 	dcs_event->type = 3;
 
-	strncpy(dcs_event->log_tag, dcs_event_tag,
+	strlcpy(dcs_event->log_tag, dcs_event_tag,
 		sizeof(dcs_event->log_tag));
-	strncpy(dcs_event->event_id, dcs_event_id,
+	strlcpy(dcs_event->event_id, dcs_event_id,
 		sizeof(dcs_event->event_id));
 
 	dcs_event->payload_length = snprintf(dcs_event_payload, 256,

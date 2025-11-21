@@ -32,30 +32,6 @@
 #define DSI_DEBUG(fmt, ...)	DRM_DEV_DEBUG(NULL, "[msm-dsi-debug]: "fmt, \
 								##__VA_ARGS__)
 
-#ifdef OPLUS_FEATURE_DISPLAY
-#include <soc/oplus/system/oplus_mm_kevent_fb.h>
-#define DSI_MM_ERR(fmt, ...)	\
-	do { \
-			DRM_DEV_ERROR(NULL, "[msm-dsi-error]: " fmt, ##__VA_ARGS__); \
-			mm_fb_display_kevent_named(MM_FB_KEY_RATELIMIT_1H, fmt, ##__VA_ARGS__); \
-		} while(0)
-#define DSI_MM_WARN(fmt, ...)	\
-	do { \
-			DRM_WARN("[msm-dsi-warn]: " fmt, ##__VA_ARGS__); \
-			mm_fb_display_kevent_named(MM_FB_KEY_RATELIMIT_1H, fmt, ##__VA_ARGS__); \
-		} while(0)
-#define DSI_MM_INFO(fmt, ...)	\
-	do { \
-			DRM_DEV_INFO(NULL, "[msm-dsi-info]: " fmt, ##__VA_ARGS__); \
-			mm_fb_display_kevent_named(MM_FB_KEY_RATELIMIT_1H, fmt, ##__VA_ARGS__); \
-		} while(0)
-#define DSI_MM_DEBUG(fmt, ...)	\
-	do { \
-			DRM_DEV_DEBUG(NULL, "[msm-dsi-debug]: " fmt, ##__VA_ARGS__); \
-			mm_fb_display_kevent_named(MM_FB_KEY_RATELIMIT_1H, fmt, ##__VA_ARGS__); \
-		} while(0)
-#endif /* OPLUS_FEATURE_DISPLAY */
-
 /**
  * enum dsi_pixel_format - DSI pixel formats
  * @DSI_PIXEL_FORMAT_RGB565:
@@ -247,6 +223,7 @@ enum dsi_dfps_type {
 	DSI_DFPS_IMMEDIATE_CLK,
 	DSI_DFPS_IMMEDIATE_HFP,
 	DSI_DFPS_IMMEDIATE_VFP,
+	DSI_DFPS_IMMEDIATE_HV_P,
 	DSI_DFPS_MAX
 };
 
@@ -453,6 +430,8 @@ enum dsi_cmd_set_type {
 	DSI_CMD_LOADING_EFFECT_OFF,
 	DSI_CMD_HBM_ENTER_SWITCH,
 	DSI_CMD_HBM_EXIT_SWITCH,
+	DSI_CMD_HBM_ENTER_DIMMING,
+	DSI_CMD_HBM_EXIT_DIMMING,
 	DSI_CMD_HBM_MAX,
 	DSI_CMD_EXIT_HBM_MAX,
 	DSI_CMD_DIMMING_SETTING,
@@ -479,6 +458,10 @@ enum dsi_cmd_set_type {
 	DSI_CMD_DEMURA_DBV_MODE1,
 	DSI_CMD_DEMURA_DBV_MODE2,
 	DSI_CMD_DEMURA_DBV_MODE3,
+	DSI_CMD_DEMURA_DBV_MODE4,
+	DSI_CMD_DEMURA_DBV_MODE5,
+	DSI_CMD_DEMURA_DBV_MODE6,
+	DSI_CMD_DEMURA_DBV_MODE7,
 	DSI_CMD_DLY_ON,
 	DSI_CMD_DLY_OFF,
 	DSI_CMD_CABC_OFF,
@@ -491,6 +474,7 @@ enum dsi_cmd_set_type {
 	DSI_CMD_PANEL_INIT,
 	DSI_CMD_PWM_TURBO_ON,
 	DSI_CMD_VID_120_SWITCH,
+	DSI_CMD_VID_90_SWITCH,
 	DSI_CMD_VID_60_SWITCH,
 	DSI_CMD_PWM_TURBO_OFF,
 	DSI_CMD_PWM_TURBO_HBM_ON,
@@ -935,6 +919,7 @@ struct dsi_display_mode_priv_info {
 	unsigned int oplus_ofp_aod_off_insert_black_frame;
 	unsigned int oplus_ofp_aod_off_black_frame_total_time;
 	unsigned int oplus_ofp_uiready_delay_frames;
+	unsigned int oplus_ofp_hbm_off_seed_on_delay_frames;
 #endif /* OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT */
 };
 

@@ -8,7 +8,7 @@
 #include "sa_exec.h"
 
 /* register vender hook in driver/android/exec.c */
-void task_rename_handler(void *unused, struct task_struct *tsk, const char *buf)
+void task_rename_handler(void *unused, struct task_struct *tsk, const char *comm)
 {
-	sched_assist_target_comm(tsk, buf);
+	sched_assist_target_comm(tsk, comm);
 }

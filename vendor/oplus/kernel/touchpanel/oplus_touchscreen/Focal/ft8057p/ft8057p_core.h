@@ -1,7 +1,7 @@
 /***************************************************
  * File:focaltech_core.h
  *
- * Copyright (c)  2008- 2030  Oplus Mobile communication Corp.ltd.
+ * Copyright (c)  2008- 2030  oplus Mobile communication Corp.ltd.
  * Description:
  *             focaltech include file
  * Version:1.0:

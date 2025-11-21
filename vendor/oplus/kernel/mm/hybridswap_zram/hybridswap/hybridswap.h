@@ -19,6 +19,7 @@ extern ssize_t hybridswap_enable_show(struct device *dev,
 #ifdef CONFIG_HYBRIDSWAP_CORE
 extern void hybridswap_track(struct zram *zram, u32 index, struct mem_cgroup *memcg);
 extern void hybridswap_untrack(struct zram *zram, u32 index);
+
 extern int hybridswap_fault_out(struct zram *zram, u32 index);
 extern bool hybridswap_delete(struct zram *zram, u32 index);
 

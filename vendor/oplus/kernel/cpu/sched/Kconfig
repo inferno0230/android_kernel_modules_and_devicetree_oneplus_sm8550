@@ -56,6 +56,29 @@ config OPLUS_FEATURE_TASK_LOAD
 	help
 	  record cpu and task load
 
+config OPLUS_SCHED_TUNE
+	bool "Boosting for CFS tasks (EXPERIMENTAL)"
+	default n
+	help
+	  This option enables support for task classification using a new
+	  cgroup controller, schedtune. Schedtune allows tasks to be given
+	  a boost value and marked as latency-sensitive or not. This option
+	  provides the "schedtune" controller.
+
+	  This new controller:
+	  1. allows only a two layers hierarchy, where the root defines the
+	     system-wide boost value and its direct childrens define each one a
+	     different "class of tasks" to be boosted with a different value
+	  2. supports up to 16 different task classes, each one which could be
+	     configured with a different boost value
+
+	  Latency-sensitive tasks are not subject to energy-aware wakeup
+	  task placement. The boost value assigned to tasks is used to
+	  influence task placement and CPU frequency selection (if
+	  utilization-driven frequency selection is in use).
+
+	  If unsure, say N.
+
 config OPLUS_FEATURE_LOADBALANCE
 	bool "oplus loadbalance"
 	default n
@@ -170,3 +193,27 @@ config OPLUS_FEATURE_AUDIO_OPT
 	default n
 	help
 	  Turning off the camera's ux attribute in audio mode
+
+config OPLUS_FEATURE_SKIP_CAMERA_UX
+	tristate "skip camera ux tick by node"
+	default n
+	help
+	  Turning off the camera's ux attribute by node
+
+config OPLUS_FEATURE_QOS_SCHED
+	tristate "Qos Level Control for thread"
+	default n
+	help
+	  This option allows to apply qos level for thread in scheduler.
+
+config OPLUS_SCHED_GROUP_OPT
+	bool "Oplus sched group optimization"
+	depends on FAIR_GROUP_SCHED
+	default FAIR_GROUP_SCHED
+
+config OPLUS_CPU_SKIP_ROTATION
+	bool "oplus cpu skip rotation"
+	default n
+	depends on OPLUS_FEATURE_SCHED_ASSIST
+	help
+	  rotation need skip ux thread.

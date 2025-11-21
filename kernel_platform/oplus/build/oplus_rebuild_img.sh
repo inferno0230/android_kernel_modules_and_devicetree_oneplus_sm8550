@@ -26,7 +26,6 @@ function init_image_environment() {
     MKDTIMG="${ACKDIR}/prebuilts/kernel-build-tools/linux-x86/bin/mkdtimg"
     MKDTOIMG="${ACKDIR}/prebuilts/kernel-build-tools/linux-x86/bin/mkdtboimg.py"
     MKBOOTFS="${ACKDIR}/prebuilts/kernel-build-tools/linux-x86/bin/mkbootfs"
-    #IMAGE_SERVER="xxx"
     mkdir -p ${IMAGE_OUT}
 }
 function download_prebuild_image() {
@@ -103,7 +102,6 @@ rebuild_boot_image() {
     rm -rf ${BOOT_TMP_IMAGE}/*
     boot_mkargs=$(${PYTHON_TOOL} ${UNPACK_BOOTIMG_TOOL} --boot_img ${ORIGIN_IMAGE}/boot.img --out ${BOOT_TMP_IMAGE} --format=mkbootimg)
     cp ${TOPDIR}/kernel_platform/out/msm-${pre_path}-${variants_platform}-${variants_type}/dist/Image ${BOOT_TMP_IMAGE}/kernel
-    #cp /work/oplus_80318998/work/8650master/source/vnd/device/qcom/pineapple-kernel/Image ${BOOT_TMP_IMAGE}/kernel
     bash -c "${PYTHON_TOOL} ${MKBOOTIMG_PATH} ${boot_mkargs} -o ${IMAGE_OUT}/boot.img"
 }
 

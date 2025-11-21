@@ -5,8 +5,6 @@
 #ifndef _OSVELTE_COMMON_H
 #define _OSVELTE_COMMON_H
 
-#include <asm/ioctls.h>
-
 #define KMODULE_NAME "oplus_bsp_mm_osvelte"
 
 #if IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_OSVELTE_DBG)
@@ -19,65 +17,48 @@
 
 #define OSVELTE_LOG_TAG DEV_NAME
 
-/* experimental feature */
-#define OSVELTE_FEATURE_USE_HASHLIST 1
+/* declare page-flags here */
+#define PG_ezreclaimable (PG_oem_reserved)
 
+enum oplus_mm_scene_bit {
+	MM_SCENE_CAMERA = 0,
+	MM_SCENE_ANIMATION,
+	NR_MM_SCENE_BIT,
+};
+
+enum oplus_mm_symbol {
+	OPLUS_MM_KOBJ,
+	OPLUS_TASK_EZRECLAIMD,
+	OMS_END,
+};
+
+/* common ioctl for userspace */
 #define __COMMONIO 0xFA
-#define CMD_OSVELTE_GET_VERSION _IO(__COMMONIO, 1) /* osvelte version */
+#define CMD_OSVELTE_GET_VERSION		_IO(__COMMONIO, 1)
+#define CMD_OSVELTE_SET_SCENE		_IO(__COMMONIO, 2)
+#define CMD_OSVELTE_CLEAR_SCENE		_IO(__COMMONIO, 3)
 
-#define OSVELTE_MAJOR		(0)
-#define OSVELTE_MINOR		(2)
-#define OSVELTE_PATCH_NUM	(3)
-#define OSVELTE_VERSION (OSVELTE_MAJOR << 16 | OSVELTE_MINOR)
+struct osvelte_common_header {
+	u32 api_version;
+	u64 private_data;
+	u32 buffer_len;
+	/* payload */
+	char data[];
+};
 
-#define OSVELTE_STATIC_ASSERT(c)				\
-{								\
-	enum { OSVELTE_static_assert = 1 / (int)(!!(c)) };	\
-}
-
+/* kgsl.c use osvelte_info */
 #define osvelte_info(fmt, ...)      \
 	pr_info(OSVELTE_LOG_TAG ": " fmt, ##__VA_ARGS__)
 
 #define osvelte_err(fmt, ...)      \
 	pr_err(OSVELTE_LOG_TAG ": " fmt, ##__VA_ARGS__)
 
-#define MM_LOG_LVL 1
-enum {
-	MM_LOG_VERBOSE = 0,
-	MM_LOG_INFO,
-	MM_LOG_DEBUG,
-	MM_LOG_ERR,
-};
+long osvelte_common_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
+int osvelte_common_init(struct kobject *root);
+int osvelte_common_exit(void);
 
-static inline char mm_loglvl_to_char(int l)
-{
-	switch (l) {
-	case MM_LOG_VERBOSE:
-		return 'V';
-	case MM_LOG_INFO:
-		return 'I';
-	case MM_LOG_DEBUG:
-		return 'D';
-	case MM_LOG_ERR:
-		return 'E';
-	}
-	return '?';
-}
-
-#define osvelte_log(l, f, ...) do {					\
-	if (l >= MM_LOG_LVL) 						\
-		printk(KERN_ERR "%s %5d %5d %c %-16s: %s:%d "f,		\
-		       OSVELTE_LOG_TAG, current->tgid, current->pid,	\
-		       mm_loglvl_to_char(l), current->comm, __func__,	\
-		       __LINE__,  ##__VA_ARGS__);			\
-} while (0)
-
-#define osvelte_loge(f, ...)						\
-	osvelte_log(MM_LOG_ERR, f, ##__VA_ARGS__)
-
-#define osvelte_logi(f, ...)						\
-	osvelte_log(MM_LOG_INFO, f, ##__VA_ARGS__)
-
-#define osvelte_logd(f, ...)						\
-	osvelte_log(MM_LOG_DEBUG, f, ##__VA_ARGS__)
+extern struct kobject *oplus_mm_kobj;
+extern void osvelte_register_symbol(enum oplus_mm_symbol sym, void *data);
+extern void *osvelte_read_symbol(enum oplus_mm_symbol sym, bool atomic);
+extern bool osvelte_test_scene(unsigned long nr);
 #endif /* _OSVELTE_COMMON_H */

@@ -15,6 +15,8 @@
 
 extern struct proc_dir_entry *game_opt_dir;
 
+extern pid_t game_pid;
+
 extern atomic_t need_stat_util;
 extern atomic_t need_stat_wake;
 
@@ -23,6 +25,7 @@ int cpufreq_limits_init(void);
 int task_util_init(void);
 int rt_info_init(void);
 int fake_cpufreq_init(void);
+int debug_init(void);
 
 bool get_task_name(pid_t pid, struct task_struct *in_task, char *name);
 

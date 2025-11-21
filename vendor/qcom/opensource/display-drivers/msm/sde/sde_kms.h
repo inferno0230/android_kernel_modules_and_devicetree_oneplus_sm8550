@@ -44,6 +44,9 @@
 #ifdef OPLUS_FEATURE_DISPLAY
 #include <soc/oplus/system/oplus_project.h>
 #endif /* OPLUS_FEATURE_DISPLAY */
+#ifdef OPLUS_TRACKPOINT_REPORT
+#include <soc/oplus/oplus_trackpoint_report.h>
+#endif /* OPLUS_TRACKPOINT_REPORT */
 
 #define DRMID(x) ((x) ? (x)->base.id : -1)
 
@@ -95,15 +98,6 @@
 
 #define CHECK_LAYER_BOUNDS(offset, size, max_size) \
 	(((size) > (max_size)) || ((offset) > ((max_size) - (size))))
-
-#ifdef OPLUS_FEATURE_DISPLAY
-#include <soc/oplus/system/oplus_mm_kevent_fb.h>
-#define SDE_MM_ERROR(fmt, ...) \
-	do { \
-		pr_err("[sde error]" fmt, ##__VA_ARGS__); \
-		mm_fb_display_kevent_named(MM_FB_KEY_RATELIMIT_1H, fmt, ##__VA_ARGS__); \
-	} while(0)
-#endif /* OPLUS_FEATURE_DISPLAY */
 
 /**
  * ktime_compare_safe - compare two ktime structures

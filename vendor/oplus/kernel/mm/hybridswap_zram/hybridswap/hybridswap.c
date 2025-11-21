@@ -711,6 +711,16 @@ ssize_t hybridswap_report_show(struct device *dev,
 	return hybridswap_error_record_show(buf);
 }
 
+static inline int read_esuo_pages(struct hybridswap_stat *stat)
+{
+	unsigned long eswap_used_pages = atomic64_read(&stat->stored_pages);
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_OSVELTE) && IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_EZRECLAIMD)
+	if (ezreclaimd_enable)
+		return atomic_read(&ezreclaimable_nr) << (PAGE_SHIFT - 10);
+#endif /* CONFIG_OPLUS_FEATURE_MM_OSVELTE && CONFIG_OPLUS_FEATURE_MM_EZRECLAIMD */
+	return (int) (eswap_used_pages << (PAGE_SHIFT - 10));
+}
+
 static inline ssize_t meminfo_show(struct hybridswap_stat *stat, char *buf, ssize_t len)
 {
 	unsigned long eswap_total_pages = 0, eswap_compressed_pages = 0;
@@ -735,8 +745,8 @@ static inline ssize_t meminfo_show(struct hybridswap_stat *stat, char *buf, ssiz
 			  "EST:", eswap_total_pages << (PAGE_SHIFT - 10));
 	size += scnprintf(buf + size, len - size, "%-32s %12llu KB\n",
 			  "ESU_C:", eswap_compressed_pages << (PAGE_SHIFT - 10));
-	size += scnprintf(buf + size, len - size, "%-32s %12llu KB\n",
-			  "ESU_O:", eswap_used_pages << (PAGE_SHIFT - 10));
+	size += scnprintf(buf + size, len - size, "%-32s %12d KB\n",
+			  "ESU_O:", read_esuo_pages(stat));
 	size += scnprintf(buf + size, len - size, "%-32s %12llu KB\n",
 			  "ZST:", zram_total_pags << (PAGE_SHIFT - 10));
 	size += scnprintf(buf + size, len - size, "%-32s %12llu KB\n",
@@ -863,14 +873,6 @@ ssize_t hybridswap_meminfo_show(struct device *dev,
 {
 	struct hybridswap_stat *stat = NULL;
 
-#ifdef CONFIG_CONT_PTE_HUGEPAGE_64K_ZRAM
-	if (chp_supported) {
-		if (hybridswap_get_stat_obj())
-			return chp_meminfo_show(buf, PAGE_SIZE);
-		else
-			return 0;
-	}
-#endif
 	if (!hybridswap_core_enabled())
 		return 0;
 
@@ -1994,11 +1996,11 @@ void zram_lru_add(struct zram *zram, u32 index, struct mem_cgroup *memcg)
 		return;
 
 	zram_set_memcg(zram, index, memcg->id.id);
+	size = zram_get_obj_size(zram, index);
+
 	hs_list_add(obj_idx(zram->hs_swap, index),
 		    mcg_idx(zram->hs_swap, memcg->id.id),
 		    zram->hs_swap->obj_table);
-
-	size = zram_get_obj_size(zram, index);
 
 	atomic64_add(size, &MEMCGRP_ITEM(memcg, zram_stored_size));
 	atomic64_inc(&MEMCGRP_ITEM(memcg, zram_page_size));
@@ -2035,11 +2037,11 @@ void zram_lru_add_tail(struct zram *zram, u32 index, struct mem_cgroup *mcg)
 		return;
 
 	zram_set_memcg(zram, index, mcg->id.id);
+	size = zram_get_obj_size(zram, index);
+
 	hs_list_add_tail(obj_idx(zram->hs_swap, index),
 			 mcg_idx(zram->hs_swap, mcg->id.id),
 			 zram->hs_swap->obj_table);
-
-	size = zram_get_obj_size(zram, index);
 
 	atomic64_add(size, &MEMCGRP_ITEM(mcg, zram_stored_size));
 	atomic64_inc(&MEMCGRP_ITEM(mcg, zram_page_size));
@@ -2077,10 +2079,11 @@ void zram_lru_del(struct zram *zram, u32 index)
 		return;
 
 	size = zram_get_obj_size(zram, index);
+	zram_set_memcg(zram, index, 0);
+
 	hs_list_del(obj_idx(zram->hs_swap, index),
 		    mcg_idx(zram->hs_swap, mcg->id.id),
 		    zram->hs_swap->obj_table);
-	zram_set_memcg(zram, index, 0);
 
 	atomic64_sub(size, &MEMCGRP_ITEM(mcg, zram_stored_size));
 	atomic64_dec(&MEMCGRP_ITEM(mcg, zram_page_size));
@@ -2158,6 +2161,12 @@ struct hybridswap_cfg global_settings;
 
 #define DEVICE_NAME_LEN 64
 static char loop_device[DEVICE_NAME_LEN];
+
+bool nandswapV2_supported(void)
+{
+	return !strncmp(NANDSWAPV2, loop_device, sizeof(NANDSWAPV2) - 1)
+		|| !strncmp(NANDSWAPV2_CRYPTO, loop_device, sizeof(NANDSWAPV2_CRYPTO) - 1);
+}
 
 void *hybridswap_malloc(size_t size, bool fast, bool nofail)
 {
@@ -2262,10 +2271,6 @@ void hybridswap_set_reclaim_in_enable(bool en)
 
 bool hybridswap_core_enabled(void)
 {
-#ifdef CONFIG_CONT_PTE_HUGEPAGE_64K_ZRAM
-	if (chp_supported)
-		return false;
-#endif
 	return !!atomic_read(&global_settings.enable);
 }
 
@@ -2649,35 +2654,12 @@ ssize_t backing_dev_show(struct device *dev,
 ssize_t hybridswap_loop_device_store(struct device *dev,
 				     struct device_attribute *attr, const char *buf, size_t len)
 {
-#ifdef CONFIG_CONT_PTE_HUGEPAGE_64K_ZRAM
-	struct zram *zram;
-
-	if (!chp_supported)
-		goto origin;
-
-	if (strncmp("chp", buf, 3) != 0) {
-		log_err("failed to set chp loop device\n");
-		return -EINVAL;
-	}
-
-	zram = dev_to_zram(dev);
-	down_write(&zram->init_lock);
-	if (!hybridswap_global_setting_init(zram))
-		log_err("setting init failed\n");
-	up_write(&zram->init_lock);
-	return len;
-origin:
-#endif
 	return backing_dev_store(dev, attr, buf, len);
 }
 
 ssize_t hybridswap_loop_device_show(struct device *dev,
 				    struct device_attribute *attr, char *buf)
 {
-#ifdef CONFIG_CONT_PTE_HUGEPAGE_64K_ZRAM
-	if (chp_supported)
-		return sprintf(buf, "chp\n");
-#endif
 	return backing_dev_show(dev, attr, buf);
 }
 
@@ -3467,6 +3449,7 @@ int hybridswap_mgr_init(struct zram *zram)
 		ret = -ENOMEM;
 		goto out;
 	}
+
 	return 0;
 out:
 	hybridswap_mgr_deinit(zram);
@@ -3580,6 +3563,7 @@ void hybridswap_memcg_deinit(struct mem_cgroup *mcg)
 	log_dbg("deinit mcg %d %s, extent done\n", mcg->id.id, hybs->name);
 	hybs->zram = NULL;
 }
+
 void hybridswap_zram_lru_add(struct zram *zram,
 			     u32 index, struct mem_cgroup *memcg)
 {
@@ -3960,33 +3944,6 @@ static void hybridswap_limit_inflight(struct hybridswap_io_req *req)
 	}
 }
 
-static void hybridswap_wait_io_finish(struct hybridswap_io_req *req)
-{
-	int ret;
-	unsigned int wait_time;
-
-	if (!req->wait_io_finish_flag || !req->page_cnt)
-		return;
-
-	if (req->io_para.scene == SCENE_FAULT_OUT) {
-		log_dbg("fault out wait finish start\n");
-		wait_for_completion_io_timeout(&req->io_end_flag,
-					       MAX_SCHEDULE_TIMEOUT);
-
-		return;
-	}
-
-	wait_time = (req->io_para.scene == SCENE_RECLAIM_IN) ?
-		HYBRIDSWAP_WRITE_TIME : HYBRIDSWAP_READ_TIME;
-
-	do {
-		log_dbg("wait finish start\n");
-		ret = wait_event_timeout(req->io_wait,
-					 (!atomic_read(&req->extent_inflight)),
-					 msecs_to_jiffies(wait_time));
-	} while (!ret);
-}
-
 static void inc_hybridswap_inflight(struct hybridswap_segment *segment)
 {
 	mutex_lock(&segment->req->refmutex);
@@ -4116,6 +4073,76 @@ static void hybridswap_io_end_work(struct work_struct *work)
 	set_user_nice(current, old_nice);
 }
 
+void hybridswap_io_end_fault_out(struct hybridswap_io_req *req,
+				 struct hybridswap_segment *segment)
+{
+	struct hybridswap_record_stage *record = req->io_para.record;
+	int old_nice = task_nice(current);
+	ktime_t work_start;
+	unsigned long long work_start_ravg_sum;
+
+	log_dbg("scene %u, task_nice %d, req_nice %d\n",
+		req->io_para.scene, old_nice, req->nice);
+
+	if (!segment) {
+		log_err("segment is NULL\n");
+		return;
+	}
+
+	if (unlikely(segment->bio_result)) {
+		hybridswap_io_err_proc(req, segment);
+		return;
+	}
+
+	log_dbg("segment sector 0x%llx, extent_cnt %d passed\n",
+		segment->segment_sector, segment->extent_cnt);
+	set_user_nice(current, req->nice);
+
+	perf_async_set(record, STAGE_SCHED_WORK,
+		       segment->time.end_io, 0);
+	work_start = ktime_get();
+	work_start_ravg_sum = hybridswap_get_ravg_sum();
+
+	hybridswap_io_entry_proc(segment);
+
+	perf_async_set(record, STAGE_END_WORK, work_start,
+		       work_start_ravg_sum);
+
+	kref_put_mutex(&req->refcount, hybridswap_io_req_release,
+		       &req->refmutex);
+	kfree(segment);
+
+	set_user_nice(current, old_nice);
+}
+
+void hybridswap_wait_io_finish(struct hybridswap_io_req *req,
+			       struct hybridswap_segment *segment)
+{
+	int ret;
+	unsigned int wait_time;
+
+	if (!req->wait_io_finish_flag || !req->page_cnt)
+		return;
+
+	if (req->io_para.scene == SCENE_FAULT_OUT) {
+		log_dbg("fault out wait finish start\n");
+		wait_for_completion_io_timeout(&req->io_end_flag,
+					       MAX_SCHEDULE_TIMEOUT);
+		/* do the end_io in its own context */
+		hybridswap_io_end_fault_out(req, segment);
+		return;
+	}
+	wait_time = (req->io_para.scene == SCENE_RECLAIM_IN) ?
+		HYBRIDSWAP_WRITE_TIME : HYBRIDSWAP_READ_TIME;
+
+	do {
+		log_dbg("wait finish start\n");
+		ret = wait_event_timeout(req->io_wait,
+					 (!atomic_read(&req->extent_inflight)),
+					 msecs_to_jiffies(wait_time));
+	} while (!ret);
+}
+
 static void hybridswap_end_io(struct bio *bio)
 {
 	struct hybridswap_segment *segment = bio->bi_private;
@@ -4136,10 +4163,18 @@ static void hybridswap_end_io(struct bio *bio)
 	perf_async_set(record, STAGE_END_IO,
 		       segment->time.submit_bio, 0);
 
-	workqueue = (req->io_para.scene == SCENE_RECLAIM_IN) ?
-		hybridswap_proc_write_workqueue : hybridswap_proc_read_workqueue;
 	segment->time.end_io = ktime_get();
 	segment->bio_result = bio->bi_status;
+
+	log_dbg("sector %llu finish\n", segment->segment_sector);
+	if (req->io_para.scene == SCENE_FAULT_OUT) {
+		complete(&req->io_end_flag);
+		bio_put(bio);
+		return;
+	}
+
+	workqueue = (req->io_para.scene == SCENE_RECLAIM_IN) ?
+		hybridswap_proc_write_workqueue : hybridswap_proc_read_workqueue;
 
 	queue_work(workqueue, &segment->endio_work);
 	bio_put(bio);
@@ -4529,6 +4564,7 @@ int hybridswap_plug_finish(void *io_handler)
 {
 	int ret;
 	struct hybridswap_io_req *req = (struct hybridswap_io_req *)io_handler;
+	struct hybridswap_segment *segment = req->segment;
 
 	perf_latency_begin(req->io_para.record, STAGE_IO_EXTENT);
 	ret = hybridswap_io_submit(req, false);
@@ -4536,7 +4572,7 @@ int hybridswap_plug_finish(void *io_handler)
 		log_err("submit fail %d\n", ret);
 
 	perf_latency_end(req->io_para.record, STAGE_IO_EXTENT);
-	hybridswap_wait_io_finish(req);
+	hybridswap_wait_io_finish(req, segment);
 	hybridswap_perf_lat_point(req->io_para.record, STAGE_WAKE_UP);
 
 	hybridswap_stat_io_bytes(req);
@@ -4648,7 +4684,7 @@ void hybridswap_untrack(struct zram *zram, u32 index)
 		return;
 
 	while (zram_test_flag(zram, index, ZRAM_UNDER_WB) ||
-	       zram_test_flag(zram, index, ZRAM_BATCHING_OUT)) {
+		zram_test_flag(zram, index, ZRAM_BATCHING_OUT)) {
 		zram_slot_unlock(zram, index);
 		udelay(50);
 		zram_slot_lock(zram, index);
@@ -4933,6 +4969,14 @@ static int hybridswap_permcg_reclaim(struct mem_cgroup *memcg,
 
 	require_size_before = require_size;
 	while (require_size) {
+		/* Abort swap when receive SIGUSR2 */
+		if (unlikely(sigismember(&current->pending.signal, SIGUSR2) ||
+			sigismember(&current->signal->shared_pending.signal, SIGUSR2))) {
+			log_info("swap: receive SIGUSR2, abort swapout\n");
+			ret = -EINTR;
+			break;
+		}
+
 		if (hybridswap_reclaim_extent(memcg, sched, &require_size,
 					      mcg_reclaimed_sz, &io_err))
 			break;
@@ -4954,10 +4998,11 @@ static int hybridswap_permcg_reclaim(struct mem_cgroup *memcg,
 	atomic64_inc(&hybs->hybridswap_outcnt);
 
 out:
-	log_info("memcg %s %lu %lu reclaim_in %lu KB eswap %lu zram %lu %d\n",
+	log_info("memcg %s %lu %lu reclaim_in %lu KB eswap %lld zram_chp %lld zram %lld %d\n",
 		 hybs->name, require_size_before, require_size,
 		 (require_size_before - require_size) >> 10,
 		 atomic64_read(&hybs->hybridswap_stored_size),
+		 0,
 		 atomic64_read(&hybs->zram_stored_size), ret);
 	return ret;
 }
@@ -5461,7 +5506,7 @@ void hybridswap_mem_cgroup_deinit(struct mem_cgroup *memcg)
 	hybridswap_memcg_deinit(memcg);
 }
 
-void hybridswap_force_reclaim(struct mem_cgroup *mcg)
+void hybridswap_force_reclaim(struct mem_cgroup *mcg, s64 val)
 {
 	unsigned long mcg_reclaimed_size = 0, require_size;
 	memcg_hybs_t *hybs;
@@ -5477,8 +5522,15 @@ void hybridswap_force_reclaim(struct mem_cgroup *mcg)
 	if (!hybs || !hybs->zram)
 		return;
 
+	if (val < 0 || val > 100)
+		return;
+
+	log_info("swapout: input percentage is %lld\n", val);
 	mutex_lock(&hybs->swap_lock);
 	require_size = atomic64_read(&hybs->zram_stored_size);
+	/* support percentage swapout */
+	require_size = (unsigned long) (require_size / 100 * val);
+	log_info("swapout: updated require_size is %lu\n", require_size);
 	hybs->force_swapout = true;
 	hybridswap_permcg_reclaim(mcg, require_size, &mcg_reclaimed_size);
 	hybs->force_swapout = false;

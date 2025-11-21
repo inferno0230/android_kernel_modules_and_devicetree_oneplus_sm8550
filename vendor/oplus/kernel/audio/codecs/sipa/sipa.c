@@ -845,7 +845,11 @@ int sipa_pa_enable_by_scene(int channel, unsigned int scene, int enable)
 			break;
 		}
 	}
-
+	if (NULL == si_pa) {
+		mutex_unlock(&sipa_mutex);
+		pr_err("%s, %d, si_pa == NULL\n", __func__, __LINE__);
+		return -ENODEV;
+	}
 	si_pa->scene = scene;
 	mutex_unlock(&sipa_mutex);
 
@@ -931,12 +935,15 @@ int sipa_speaker_enable(struct oplus_speaker_device *speaker_device, int enable)
 	channel = speaker_device->type - L_SPK;
 	switch (speaker_device->speaker_mode) {
 	case WORK_MODE_VOICE:
+	case WORK_MODE_LEFT_VOICE:
 		scene = AUDIO_SCENE_VOICE;
 		break;
 	case WORK_MODE_RECEIVER:
 		scene = AUDIO_SCENE_RECEIVER;
 		break;
 	case WORK_MODE_MUSIC:
+	case WORK_MODE_LEFT:
+	case WORK_MODE_RIGHT:
 	default:
 		scene = AUDIO_SCENE_PLAYBACK;
 		break;
@@ -3013,11 +3020,6 @@ void sipa_i2c_remove(struct i2c_client *client)
 	sipa_dev_t *si_pa = NULL;
 
 	pr_info("[ info][%s] %s: remove \r\n", LOG_FLAG, __func__);
-#ifdef CONFIG_SND_SOC_OPLUS_PA_MANAGER
-	if (!IS_DIGITAL_PA_TYPE(si_pa->chip_type)) {
-		oplus_speaker_pa_unregister(si_pa->oplus_dev_node);
-	}
-#endif /* CONFIG_SND_SOC_OPLUS_PA_MANAGER */
 
 	si_pa = (sipa_dev_t *)dev_get_drvdata(&client->dev);
 	if (NULL == si_pa)
@@ -3026,6 +3028,11 @@ void sipa_i2c_remove(struct i2c_client *client)
 #else
 		return;
 #endif
+#ifdef CONFIG_SND_SOC_OPLUS_PA_MANAGER
+	if (!IS_DIGITAL_PA_TYPE(si_pa->chip_type)) {
+		oplus_speaker_pa_unregister(si_pa->oplus_dev_node);
+	}
+#endif /* CONFIG_SND_SOC_OPLUS_PA_MANAGER */
 	if (IS_DIGITAL_PA_TYPE(si_pa->chip_type)) {
 		cancel_delayed_work_sync(&si_pa->interrupt_work);
 		// cancel_delayed_work_sync(&si_pa->monitor_work);

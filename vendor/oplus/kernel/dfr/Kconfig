@@ -77,6 +77,10 @@ source "drivers/soc/oplus/dfr/common/oplus_fdleak/Kconfig"
 source "drivers/soc/oplus/dfr/common/oplus_bsp_dfr_ubt/Kconfig"
 #endif /* CONFIG_OPLUS_BSP_DFR_USERSPACE_BACKTRACE */
 
+#ifdef CONFIG_OPLUS_FEATURE_KP_FREEZE_DETECT
+source "drivers/soc/oplus/dfr/common/kp_freeze_detect/Kconfig"
+#endif /* CONFIG_OPLUS_FEATURE_KP_FREEZE_DETECT */
+
 #ifdef OPLUS_FEATURE_LAST_BOOT_REASON
 source "drivers/soc/oplus/dfr/common/last_boot_reason/Kconfig"
 #endif /*OPLUS_FEATURE_LAST_BOOT_REASON*/

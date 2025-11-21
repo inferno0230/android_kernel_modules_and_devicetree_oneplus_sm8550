@@ -29,6 +29,7 @@ obj-$(CONFIG_PCPPAGES_OPT) += async_reclaim_opt/pcppages_opt/
 obj-$(CONFIG_ABORT_MM_OPT) += async_reclaim_opt/abort_mm_opt/
 obj-$(CONFIG_KSHRINK_LRUVECD) += async_reclaim_opt/kshrink_lruvecd/
 obj-$(CONFIG_MAPPED_PROTECT) += memload_opt/mapped_protect/
+obj-$(CONFIG_OPLUS_EXIT_MM_OPTIMIZE) += exit_mm_optimize/
 
 obj-$(CONFIG_OPLUS_FEATURE_SIGKILL_DIAGNOSIS) += sigkill_diagnosis/
 
@@ -36,3 +37,4 @@ obj-y += uxmem_opt/
 obj-y += dynamic_readahead/
 obj-y += kswapd_opt/
 obj-$(CONFIG_LOOK_AROUND) += memload_opt/look_around/
+obj-y += mglru_opt/

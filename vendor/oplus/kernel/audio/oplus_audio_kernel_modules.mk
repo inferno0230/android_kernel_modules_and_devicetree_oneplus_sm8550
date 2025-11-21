@@ -17,6 +17,9 @@ endif
 ifeq ($(call is-board-platform-in-list,crow), true)
 AUDIO_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/oplus_audio_extend.ko
 AUDIO_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/oplus_audio_aw882xx.ko
+AUDIO_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/oplus_audio_sipa.ko
+AUDIO_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/oplus_audio_sipa_tuning.ko
+AUDIO_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/oplus_audio_pa_manager.ko
 endif
 
 ifeq ($(call is-board-platform-in-list,blair), true)

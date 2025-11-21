@@ -8,7 +8,7 @@
 #include <trace/hooks/mm.h>
 #include <linux/fdtable.h>
 
-#include "common.h"
+#include "internal.h"
 #include "sys-memstat.h"
 
 #define DEFINE_PROC_SHOW_ATTRIBUTE_SIZE_BUF(__name, buf_sz)		\

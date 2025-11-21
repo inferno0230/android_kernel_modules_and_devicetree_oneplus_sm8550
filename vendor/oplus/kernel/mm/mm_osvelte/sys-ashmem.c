@@ -9,7 +9,7 @@
 #include <linux/fdtable.h>
 #include <linux/hashtable.h>
 
-#include "common.h"
+#include "internal.h"
 #include "sys-memstat.h"
 #include "memstat.h"
 

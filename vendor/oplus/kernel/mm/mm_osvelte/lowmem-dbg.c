@@ -31,7 +31,7 @@
 #include <linux/android_debug_symbols.h>
 #include "../../../mm/slab.h"
 
-#include "common.h"
+#include "internal.h"
 #include "memstat.h"
 #include "sys-memstat.h"
 #include "lowmem-dbg.h"

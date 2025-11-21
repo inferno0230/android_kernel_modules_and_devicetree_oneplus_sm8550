@@ -1190,9 +1190,7 @@ static void __exit exit_shutdown_detect_ctrl(void)
 {
 	pr_err("shutdown_detect:unregister shutdown_detect interface\n");
 }
-
 module_exit(exit_shutdown_detect_ctrl);
-
 #if IS_MODULE(CONFIG_OPLUS_FEATURE_SHUTDOWN_DETECT)
 MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
 #endif

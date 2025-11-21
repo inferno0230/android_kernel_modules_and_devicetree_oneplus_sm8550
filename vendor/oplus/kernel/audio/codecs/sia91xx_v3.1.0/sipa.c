@@ -62,7 +62,19 @@
 #include <mtk-sp-spk-amp.h>
 #endif
 
-#define SIPA_NAME							("sipa")
+#if IS_ENABLED(CONFIG_SND_SOC_OPLUS_PA_MANAGER)
+#include "../../mtk/oplus_speaker_manager/oplus_speaker_manager_platform.h"
+#include "../../mtk/oplus_speaker_manager/oplus_speaker_manager_codec.h"
+
+#define OPLUS_AUDIO_PA_BOOST_VOLTAGE_MAX_LEVEL 4
+enum {
+	SIA81XX_CHANNEL_L = 0,
+	SIA81XX_CHANNEL_R,
+};
+
+#endif /* CONFIG_SND_SOC_OPLUS_PA_MANAGER */
+
+#define SIPA_NAME							("sipa_3.1.0")
 #define SIPA_I2C_NAME						(SIPA_NAME)
 
 #define SIPA_CMD_POWER_ON					(1)
@@ -80,25 +92,20 @@
 #define SIPA_CMD_SET_MUTE_MODE				(615)
 #define SIPA_CMD_TEST						(777)
 
-#ifdef SIA91XX_TYPE
-#define SIA81XX_ENABLE_LEVEL				(0)
-#define SIA81XX_DISABLE_LEVEL				(1)
-#else
 #define SIA81XX_ENABLE_LEVEL				(1)
 #define SIA81XX_DISABLE_LEVEL				(0)
-#endif
 
 /* 10us > pulse width > 0.75us */
-#define MIN_OWI_PULSE_GAP_TIME_US			(1)
+#define MIN_OWI_PULSE_GAP_TIME_US			(3)
 #define MAX_OWI_PULSE_GAP_TIME_US			(160)
 #define MAX_OWI_RETRY_TIMES					(10)
 #define MIN_OWI_MODE						(1)
-#define MAX_OWI_MODE						(16)
+#define MAX_OWI_MODE						(35)
 #define DEFAULT_OWI_MODE					(6)
 /* OWI_POLARITY 0 : pulse level == high, 1 : pulse level == low */
 #define OWI_POLARITY						(SIA81XX_DISABLE_LEVEL)
 
-//#define DISTINGUISH_CHIP_TYPE
+#define DISTINGUISH_CHIP_TYPE
 //#define OWI_SUPPORT_WRITE_DATA
 #ifdef OWI_SUPPORT_WRITE_DATA
 #define OWI_DATA_BIG_END
@@ -110,11 +117,25 @@
 /* pulse electrical level opposite with the polarity */
 #define EPOLAR								(101)
 
+#if IS_ENABLED(CONFIG_SND_SOC_OPLUS_PA_MANAGER)
+void *oplus_pa_sia_node = NULL;
+#endif /*CONFIG_SND_SOC_OPLUS_PA_MANAGER*/
+
 #ifdef OPLUS_ARCH_EXTENDS
 /* 2023/03/05, Add for calibration */
 #define SMART_PA_RANGE_DEFAULT_MIN (5000)
 #define SMART_PA_RANGE_DEFAULT_MAX (7800)
+/* 2024/07/04, Add for f0 calibration */
+#define SMART_PA_RANGE_DEFAULT_F0_MIN (400)
+#define SMART_PA_RANGE_DEFAULT_F0_MAX (850)
 #define MAX_CONTROL_NAME        48
+#endif
+
+#ifdef OPLUS_ARCH_EXTENDS
+/* 2024/06/15, Add for calibration*/
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0))
+#define PDE_DATA(inode) pde_data(inode)
+#endif
 #endif
 
 static ssize_t sipa_cmd_show(struct device *cd,
@@ -146,6 +167,8 @@ static const char *support_chip_type_name_table[] = {
 	[CHIP_TYPE_SIA8152]  = "sia8152",
 	[CHIP_TYPE_SIA8152S] = "sia8152s",
 	[CHIP_TYPE_SIA8100X] = "sia8100x",
+	[CHIP_TYPE_SIA8001]  = "sia8001",
+	[CHIP_TYPE_SIA8102]  = "sia8102",
 	[CHIP_TYPE_SIA8159]  = "sia8159",
 	[CHIP_TYPE_SIA8159A] = "sia8159a",
 	[CHIP_TYPE_SIA81X9]  = "sia81x9",
@@ -155,6 +178,7 @@ static const char *support_chip_type_name_table[] = {
 	[CHIP_TYPE_SIA9175]  = "sia9175",
 	[CHIP_TYPE_SIA9177]  = "sia9177",
 	[CHIP_TYPE_SIA917X]  = "sia917x",
+	[CHIP_TYPE_SIA8157]  = "sia8157"
 };
 
 static sipa_dev_t *g_default_sia_dev;
@@ -231,24 +255,43 @@ static int sia91xx_show_all_reg(struct sipa_dev_s *si_pa)
 /********************************************************************
  * si_pa GPIO option
  ********************************************************************/
-void distinguish_chip_type(sipa_dev_t *si_pa)
+int distinguish_chip_type(sipa_dev_t *si_pa)
 {
 #ifdef DISTINGUISH_CHIP_TYPE
 	/* check sia81xx is available */
-	if (CHIP_TYPE_UNKNOWN == si_pa->chip_type ||
-		0 != check_sipa_status(si_pa)) {
+	if (NULL == si_pa) {
+		pr_err("[  err][%s] %s: si_pa is NULL !!! \r\n", LOG_FLAG, __func__);
+		return -ENODEV;
+	}
 
+	if (CHIP_TYPE_UNKNOWN == si_pa->chip_type) {
+		pr_info("[ info][%s] %s: there is no si_pa device \r\n",
+			LOG_FLAG, __func__);
+	} else {
+		if (1 == si_pa->en_dyn_id) {
+			if (1 == check_sipa_status(si_pa)) {
+				si_pa->chip_type = CHIP_TYPE_SIA8001;
+			} else if (0 == check_sipa_status(si_pa)) {
+				si_pa->chip_type = CHIP_TYPE_SIA8102;
+			}
+			device_create_file(&si_pa->pdev->dev, &dev_attr_sipa_device);
+			pr_info("[ info][%s] %s: sipa device is available, chip_type = %d .\r\n",
+				LOG_FLAG, __func__, si_pa->chip_type);
+		} else {
+			if (0 != check_sipa_status(si_pa)) {
 		si_pa->chip_type = CHIP_TYPE_UNKNOWN;
-		si_pa->en_dyn_ud_pvdd = 0;
 		pr_info("[ info][%s] %s: there is no si_pa device \r\n",
 			LOG_FLAG, __func__);
 	} else {
 		device_create_file(&si_pa->pdev->dev, &dev_attr_sipa_device);
 
-		pr_info("[ info][%s] %s: sipa device is available \r\n",
-			LOG_FLAG, __func__);
+		pr_info("[ info][%s] %s: sipa device is available, chip_type = %d .\r\n",
+			LOG_FLAG, __func__, si_pa->chip_type);
+			}
+		}
 	}
 #endif
+    return 0;
 }
 
 /********************************************************************
@@ -258,7 +301,6 @@ void distinguish_chip_type(sipa_dev_t *si_pa)
 /********************************************************************
  * si_pa GPIO option
  ********************************************************************/
-#ifndef SIA91XX_TYPE
 static __inline void gpio_flipping(
 	int pin,
 	s64 *intervel_ns)
@@ -364,7 +406,7 @@ static __inline int gpio_produce_pulse_cycles(
 
 	return ret;
 }
-#endif
+
 /********************************************************************
  * end - si_pa GPIO option
  ********************************************************************/
@@ -613,7 +655,6 @@ static int sipa_owi_write_data(
 }
 #endif
 
-#ifndef SIA91XX_TYPE
 static void sia81xx_set_owi_polarity(
 	struct sipa_dev_s *si_pa)
 {
@@ -731,7 +772,7 @@ static int sipa_owi_init(
 
 	return 0;
 }
-#endif
+
 /********************************************************************
 * end - si_pa owis option
 ********************************************************************/
@@ -751,14 +792,20 @@ static bool is_chip_type_supported(unsigned int chip_type)
 static bool sipa_is_chip_en(sipa_dev_t *si_pa)
 {
 	if (0 == si_pa->disable_pin) {
-#ifdef SIA91XX_TYPE
-		if ((SIA91XX_ENABLE_LEVEL == gpio_get_value(si_pa->rst_pin))
-			&& sipa_regmap_get_chip_en(si_pa))
-			return true;
-#else
-		if (SIA81XX_ENABLE_LEVEL == gpio_get_value(si_pa->rst_pin))
-			return true;
-#endif
+		if (IS_DIGITAL_PA_TYPE(si_pa->chip_type)) {
+			if ((SIA91XX_ENABLE_LEVEL == gpio_get_value(si_pa->rst_pin))
+				&& sipa_regmap_get_chip_en(si_pa))
+				return true;
+		} else if (si_pa->chip_type == CHIP_TYPE_SIA8157 ||
+					si_pa->chip_type == CHIP_TYPE_SIA8159 ||
+					si_pa->chip_type == CHIP_TYPE_SIA8159A) {
+			if ((SIA81XX_ENABLE_LEVEL == gpio_get_value(si_pa->rst_pin))
+				&& sipa_regmap_get_chip_en(si_pa))
+				return true;
+		} else {
+			if (SIA81XX_ENABLE_LEVEL == gpio_get_value(si_pa->rst_pin))
+				return true;
+		}
 	} else {
 		if (sipa_regmap_get_chip_en(si_pa))
 			return true;
@@ -797,6 +844,7 @@ static int sipa_resume(
 {
 	unsigned long flags;
 	int default_sia_is_open = 0;
+	int rst_pin_val;
 
 	if (NULL == si_pa) {
 		pr_err("[  err][%s] %s: si_pa is NULL !!! \r\n", LOG_FLAG, __func__);
@@ -822,11 +870,11 @@ static int sipa_resume(
 					goto err_sipa_resume;
 				}
 			}
-#ifndef SIA91XX_TYPE
-			/* power up chip */
-			if (0 != sipa_owi_write_mode(si_pa, si_pa->owi_cur_mode[si_pa->scene]))
-				goto err_sipa_resume;
-#endif
+			if (IS_SUPPORT_OWI_TYPE(si_pa->chip_type)) {
+				/* power up chip */
+				if (0 != sipa_owi_write_mode(si_pa, si_pa->owi_cur_mode[si_pa->scene]))
+					goto err_sipa_resume;
+			}
 			spin_lock_irqsave(&si_pa->rst_lock, flags);
 			gpio_set_value(si_pa->rst_pin, SIA81XX_ENABLE_LEVEL);
 			mdelay(1);	/* wait chip power up, the time must be > 1ms */
@@ -835,6 +883,9 @@ static int sipa_resume(
 			if (CHIP_TYPE_SIA8109 == si_pa->chip_type ||
 				CHIP_TYPE_SIA81X9 == si_pa->chip_type)
 				mdelay(39);	/* for sia8109 gain rising. */
+			rst_pin_val = gpio_get_value(si_pa->rst_pin);
+			pr_debug("[debug][%s] %s: channel = %d, rst_pin_val = %d, owi_mode = %d \r\n",
+				LOG_FLAG, __func__, si_pa->channel_num, rst_pin_val, si_pa->owi_cur_mode[si_pa->scene]);
 		}
 
 		sipa_reg_init(si_pa);
@@ -941,13 +992,13 @@ static int sipa_scene_set(struct sipa_dev_s *si_pa, unsigned int scene)
 
 #ifndef OPLUS_ARCH_EXTENDS
 	if (sipa_is_chip_en(si_pa)) {
-#ifdef SIA91XX_TYPE
-		sia91xx_soft_mute(si_pa);
-		sipa_reg_init(si_pa);
-		sia91xx_dsp_start(si_pa, SNDRV_PCM_STREAM_PLAYBACK);
-#else
-		sipa_reboot(si_pa);
-#endif
+		if(IS_DIGITAL_PA_TYPE(si_pa->chip_type)) {
+			sia91xx_soft_mute(si_pa);
+			sipa_reg_init(si_pa);
+			sia91xx_dsp_start(si_pa, SNDRV_PCM_STREAM_PLAYBACK);
+		}else{
+			sipa_reboot(si_pa);
+		}
 	}
 #endif
 	return 0;
@@ -1057,7 +1108,6 @@ int sipa_multi_channel_reg_dump(void)
 EXPORT_SYMBOL(sipa_multi_channel_reg_dump);
 
 
-#ifdef SIA91XX_TYPE
 static int sia91xx_info_stereo_ctl(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo)
     {
 	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
@@ -1118,21 +1168,25 @@ static int sia91xx_create_controls(struct snd_soc_component *component)
 		sia91xx_controls, mix_index);
 
 }
-#endif
 
 #if IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_FEEDBACK)
 /* 2023/04/18, Add for smartpa err feedback. */
-bool g_chk_err = false;
-
 static int sia91xx_set_check_feedback(struct snd_kcontrol *kcontrol,
 				   struct snd_ctl_elem_value *ucontrol)
 {
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(4, 16, 28))
+	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	sipa_dev_t *si_pa = snd_soc_component_get_drvdata(component);
+#else
+	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
+	sipa_dev_t *si_pa = snd_soc_codec_get_drvdata(codec);
+#endif
 	int need_chk = ucontrol->value.integer.value[0];
 
 	if (need_chk) {
-		g_chk_err = need_chk;
+		si_pa->check_fb = need_chk;
 	}
-	pr_info("%s: g_chk_err = %d", __func__, g_chk_err);
+	pr_info("%s: check_fb = %d", __func__, si_pa->check_fb);
 
 	return 0;
 }
@@ -1140,8 +1194,16 @@ static int sia91xx_set_check_feedback(struct snd_kcontrol *kcontrol,
 static int sia91xx_get_check_feedback(struct snd_kcontrol *kcontrol,
 						struct snd_ctl_elem_value *ucontrol)
 {
-	ucontrol->value.integer.value[0] = g_chk_err;
-	pr_info("%s: g_chk_err = %d", __func__, g_chk_err);
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(4, 16, 28))
+	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	sipa_dev_t *si_pa = snd_soc_component_get_drvdata(component);
+#else
+	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
+	sipa_dev_t *si_pa = snd_soc_codec_get_drvdata(codec);
+#endif
+
+	ucontrol->value.integer.value[0] = si_pa->check_fb;
+	pr_info("%s: check_fb = %d", __func__, si_pa->check_fb);
 
 	return 0;
 }
@@ -1149,6 +1211,60 @@ static int sia91xx_get_check_feedback(struct snd_kcontrol *kcontrol,
 static char const *sia91xx_check_feedback_text[] = {"Off", "On"};
 static const struct soc_enum sia91xx_check_feedback_enum =
 	SOC_ENUM_SINGLE_EXT(ARRAY_SIZE(sia91xx_check_feedback_text), sia91xx_check_feedback_text);
+
+static int sia91xx_set_bypass_feedback(struct snd_kcontrol *kcontrol,
+				   struct snd_ctl_elem_value *ucontrol)
+{
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(4, 16, 28))
+	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	sipa_dev_t *si_pa = snd_soc_component_get_drvdata(component);
+#else
+	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
+	sipa_dev_t *si_pa = snd_soc_codec_get_drvdata(codec);
+#endif
+	si_pa->control_fb = ucontrol->value.integer.value[0];
+	pr_info("%s: set %u", __func__, si_pa->control_fb);
+	return 0;
+}
+
+static int sia91xx_get_bypass_feedback(struct snd_kcontrol *kcontrol,
+						struct snd_ctl_elem_value *ucontrol)
+{
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(4, 16, 28))
+	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	sipa_dev_t *si_pa = snd_soc_component_get_drvdata(component);
+#else
+	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
+	sipa_dev_t *si_pa = snd_soc_codec_get_drvdata(codec);
+#endif
+	ucontrol->value.integer.value[0] = si_pa->control_fb;
+	pr_info("%s: get %u", __func__, si_pa->control_fb);
+
+	return 0;
+}
+
+/* 2024/06/28, Add for smartpa vbatlow err check. */
+static int sia91xx_get_vbatlow_cnt(struct snd_kcontrol *kcontrol,
+						struct snd_ctl_elem_value *ucontrol)
+{
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(4, 16, 28))
+	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	sipa_dev_t *si_pa = snd_soc_component_get_drvdata(component);
+#else
+	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
+	sipa_dev_t *si_pa = snd_soc_codec_get_drvdata(codec);
+#endif
+
+	if (si_pa->check_fb && si_pa->sipa_on) {
+		sia91xx_check_status_reg(si_pa);
+	}
+
+	ucontrol->value.integer.value[0] = si_pa->vbatlow_cnt;
+	pr_info("%s: vbatlow_cnt = %u", __func__, si_pa->vbatlow_cnt);
+	si_pa->vbatlow_cnt = 0;
+
+	return 0;
+}
 #endif /*OPLUS_FEATURE_MM_FEEDBACK*/
 
 
@@ -1607,6 +1723,278 @@ static int sipa_audio_scene_set(
 	return 0;
 }
 
+#if IS_ENABLED(CONFIG_SND_SOC_OPLUS_PA_MANAGER)
+static bool is_mute_status = false;
+int sia81xx_speaker_mute_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
+{
+	pr_info("%s() = %d\n", __func__, is_mute_status);
+	ucontrol->value.integer.value[0] = is_mute_status;
+	return 0;
+}
+
+int sia81xx_speaker_mute_set(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
+{
+	int enable = ucontrol->value.integer.value[0];
+	sipa_dev_t *sia81xx = NULL;
+	int i;
+
+	mutex_lock(&sipa_mutex);
+	for (i = 0; i < ARRAY_SIZE(g_sipa_dev); i++) {
+		sia81xx = g_sipa_dev[i];
+		if (sia81xx != NULL) {
+			if (enable) {
+				pr_info("%s: mute speaker\n", __func__);
+				if (sipa_is_chip_en(sia81xx)){
+					sipa_suspend(sia81xx);
+					is_mute_status = true;
+				}
+			} else {
+				pr_info("%s: unmute speaker\n", __func__);
+				if (!sipa_is_chip_en(sia81xx)){
+					sipa_resume(sia81xx);
+					is_mute_status = false;
+				}
+			}
+		} else {
+			pr_err("%s: struct sia81xx = NULL", __func__);
+		}
+	}
+	mutex_unlock(&sipa_mutex);
+
+	return 0;
+}
+
+static int sia81xx_audio_scene_get(
+	struct snd_kcontrol *kcontrol,
+	struct snd_ctl_elem_value *ucontrol)
+{
+	sipa_dev_t *sia81xx = NULL;
+	int i;
+
+	mutex_lock(&sipa_mutex);
+	for (i = 0; i < ARRAY_SIZE(g_sipa_dev); i++) {
+		sia81xx = g_sipa_dev[i];
+		if (NULL != sia81xx) {
+			ucontrol->value.integer.value[0] = sia81xx->scene;
+			pr_info("[debug][%s] %s: ucontrol = %ld channel = %d \r\n",
+				LOG_FLAG, __func__, ucontrol->value.integer.value[0],sia81xx->channel_num);
+		}
+	}
+	mutex_unlock(&sipa_mutex);
+
+	return 0;
+}
+
+static int sia81xx_audio_scene_set(
+	struct snd_kcontrol *kcontrol,
+	struct snd_ctl_elem_value *ucontrol)
+{
+	sipa_dev_t *sia81xx = NULL;
+	int scene = ucontrol->value.integer.value[0];
+	int i;
+
+	mutex_lock(&sipa_mutex);
+	for (i = 0; i < ARRAY_SIZE(g_sipa_dev); i++) {
+		sia81xx = g_sipa_dev[i];
+		if(NULL != sia81xx) {
+			pr_info("[debug][%s] %s: ucontrol = %d, rst = %d, channle = %d \r\n",
+				LOG_FLAG, __func__, scene, sia81xx->rst_pin, sia81xx->channel_num);
+			if(AUDIO_SCENE_NUM <= scene) {
+				sia81xx->scene = AUDIO_SCENE_PLAYBACK;
+				pr_err("[  err][%s] %s: set audio scene val = %d !!! \r\n",
+					LOG_FLAG, __func__, scene);
+			} else {
+				sia81xx->scene = scene;
+				pr_info("[debug][%s] %s: scene = %d \r\n",
+					LOG_FLAG, __func__, sia81xx->scene);
+			}
+			if (sipa_is_chip_en(sia81xx)){
+				sipa_resume(sia81xx);
+			}
+		}
+	}
+	mutex_unlock(&sipa_mutex);
+	return 0;
+}
+
+static int sia81xx_volme_boost_get(
+        struct snd_kcontrol *kcontrol,
+        struct snd_ctl_elem_value *ucontrol)
+{
+	sipa_dev_t *sia81xx = NULL;
+	//sia8152 voltage
+	//for the actual L_SPK voltage level { 7.0v, 8.0v }
+	const char voltage_sia8152x_L[OPLUS_AUDIO_PA_BOOST_VOLTAGE_MAX_LEVEL] = {0x80,0x40,0x40,0x40};
+	//for the actual R_SPK voltage level { 7.0v }
+	const char voltage_sia8152x_R[OPLUS_AUDIO_PA_BOOST_VOLTAGE_MAX_LEVEL] = {0x40,0x40,0x40,0x40};
+	unsigned char sia8152x_addr = 0x03;
+
+
+	//sia8109 voltage
+	//const char voltage_sia81xx[] = {0xCC,0xC8,0xC8,0xC6,0xCC,0xCC};
+	const char voltage_sia81xx[OPLUS_AUDIO_PA_BOOST_VOLTAGE_MAX_LEVEL] = {0xCC,0xC8,0xC6,0xCC};
+	unsigned char sia81xx_addr = 0x02;
+
+	int vol_length = OPLUS_AUDIO_PA_BOOST_VOLTAGE_MAX_LEVEL;
+	int i;
+	char val;
+
+	mutex_lock(&sipa_mutex);
+	for (i = 0; i < ARRAY_SIZE(g_sipa_dev); i++) {
+		sia81xx = g_sipa_dev[i];
+		if(NULL != sia81xx) {
+			if(CHIP_TYPE_SIA8152 == sia81xx->chip_type) {
+				if (0 != sipa_regmap_read(sia81xx->regmap, sia81xx->chip_type, sia8152x_addr, 1, &val)) {
+					pr_debug("[debug][%s] %s: err sia8152x_addr regmap_read \r\n",
+						LOG_FLAG, __func__);
+				} else {
+					for (i = 0;i < vol_length;i++) {
+						if ((sia81xx->channel_num == 0) && (val == voltage_sia8152x_L[i])) {
+							ucontrol->value.integer.value[0] = i;
+						}
+						if ((sia81xx->channel_num == 1) && (val == voltage_sia8152x_R[i])) {
+							ucontrol->value.integer.value[0] = i;
+						}
+					}
+					pr_debug("[debug][%s] %s: addr = 0x%02x, val = 0x%x channel = %d\r\n",
+						LOG_FLAG, __func__, sia8152x_addr, val, sia81xx->channel_num);
+				}
+			} else {
+				if (0 != sipa_regmap_read(sia81xx->regmap, sia81xx->chip_type, sia81xx_addr, 1, &val)) {
+					pr_debug("[debug][%s] %s: err sia81xx_addr regmap_read \r\n",
+						LOG_FLAG, __func__);
+				} else {
+					for (i = 0;i < vol_length;i++) {
+						if (val == voltage_sia81xx[i]) {
+							ucontrol->value.integer.value[0] = i;
+						}
+						pr_debug("[debug][%s] %s: addr = 0x%02x, val = 0x%x channel = %d\r\n",
+							LOG_FLAG, __func__, sia81xx_addr, val, sia81xx->channel_num);
+					}
+				}
+			}
+		}
+	}
+	mutex_unlock(&sipa_mutex);
+
+	pr_debug("[debug][%s] %s: ucontrol = %ld \r\n",
+	LOG_FLAG, __func__, ucontrol->value.integer.value[0]);
+
+	return 0;
+}
+
+int sia81xx_pa_boost_set(int index)
+{
+	sipa_dev_t *sia81xx = NULL;
+	int i;
+	//sia8152 voltage
+	//for the actual L_SPK voltage level { 7.0v, 8.0v }
+	const char voltage_sia8152x_L[OPLUS_AUDIO_PA_BOOST_VOLTAGE_MAX_LEVEL] = {0x40,0x40,0x80,0x80};
+	//for the actual R_SPK voltage level { 7.0v }
+	const char voltage_sia8152x_R[OPLUS_AUDIO_PA_BOOST_VOLTAGE_MAX_LEVEL] = {0x40,0x40,0x40,0x40};
+	unsigned char sia8152x_addr = 0x03;
+
+	//sia8109 voltage
+	const char voltage_sia8109_R[OPLUS_AUDIO_PA_BOOST_VOLTAGE_MAX_LEVEL] = {0xCC,0xC6,0xC8,0xCC};
+	const char voltage_sia8109_L[OPLUS_AUDIO_PA_BOOST_VOLTAGE_MAX_LEVEL] = {0xC8,0xC6,0xC8,0xC8};
+	unsigned char sia8109_addr = 0x02;
+
+	const char voltage_sia81xx[OPLUS_AUDIO_PA_BOOST_VOLTAGE_MAX_LEVEL] = {0xCC,0xC8,0xC6,0xCC};
+	unsigned char sia81xx_addr = 0x02;
+
+	mutex_lock(&sipa_mutex);
+	for (i = 0; i < ARRAY_SIZE(g_sipa_dev); i++) {
+		sia81xx = g_sipa_dev[i];
+		if(NULL != sia81xx) {
+			if(!sipa_is_chip_en(sia81xx)){
+				continue;
+			}
+			if (CHIP_TYPE_SIA8152 == sia81xx->chip_type) {
+				if(sia81xx->channel_num == 0) {
+					if (0 != sipa_regmap_write(sia81xx->regmap, sia81xx->chip_type, sia8152x_addr, 1, voltage_sia8152x_L+index)) {
+						pr_err("[err][%s] %s: regmap_write \r\n",LOG_FLAG, __func__);
+					}
+				} else {
+					if (0 != sipa_regmap_write(sia81xx->regmap, sia81xx->chip_type, sia8152x_addr, 1, voltage_sia8152x_R+index)) {
+						pr_err("[err][%s] %s: regmap_write \r\n",LOG_FLAG, __func__);
+					}
+				}
+			} else if (CHIP_TYPE_SIA8109 == sia81xx->chip_type) {
+				if(sia81xx->channel_num == 0) {
+					if (0 != sipa_regmap_write(sia81xx->regmap, sia81xx->chip_type, sia8109_addr, 1, voltage_sia8109_L+index)) {
+						pr_err("[err][%s] %s: regmap_write sia8109_addr L\r\n",LOG_FLAG, __func__);
+					}
+				} else {
+					if (0 != sipa_regmap_write(sia81xx->regmap, sia81xx->chip_type, sia8109_addr, 1, voltage_sia8109_R+index)) {
+						pr_err("[err][%s] %s: regmap_write sia8109_addr R\r\n",LOG_FLAG, __func__);
+					}
+				}
+			} else {
+				if (0 != sipa_regmap_write(sia81xx->regmap, sia81xx->chip_type, sia81xx_addr, 1, voltage_sia81xx+index)) {
+					pr_err("[err][%s] %s: regmap_write \r\n",LOG_FLAG, __func__);
+				}
+			}
+		}
+	}
+	mutex_unlock(&sipa_mutex);
+	return 0;
+}
+
+static int sia81xx_volme_boost_set(
+        struct snd_kcontrol *kcontrol,
+        struct snd_ctl_elem_value *ucontrol)
+{
+	int index = ucontrol->value.integer.value[0];
+	if ((index < 0) || (index >= OPLUS_AUDIO_PA_BOOST_VOLTAGE_MAX_LEVEL)) {
+		pr_err("[err][%s] %s: index = %d, ucontrol_value is Invalid parameter\r\n",
+			LOG_FLAG, __func__, index);
+		return 0;
+	}
+	return sia81xx_pa_boost_set(index);
+}
+
+void sia81xx_pa_enable_by_scene(int enable, int mode, int32_t channel) {
+	sipa_dev_t *sia81xx = NULL;
+	int i;
+
+	pr_info("%s: enable = %d, mode = %d, channel = %d\n", __func__, enable, mode, channel);
+	mutex_lock(&sipa_mutex);
+	for (i = 0; i < ARRAY_SIZE(g_sipa_dev); i++) {
+		sia81xx = g_sipa_dev[i];
+		if ((NULL != sia81xx) && (channel == sia81xx->channel_num)) {
+			break;
+		}
+	}
+	mutex_unlock(&sipa_mutex);
+
+	if(mode == SPK_MODE) {
+		if (enable) {
+			sipa_resume(sia81xx);
+		} else {
+			sipa_suspend(sia81xx);
+		}
+	} else {
+		if (enable) {
+			sia81xx->pre_scene = sia81xx->scene;
+			sia81xx->scene = AUDIO_SCENE_RECEIVER;
+			sipa_resume(sia81xx);
+		} else {
+			sipa_suspend(sia81xx);
+			sia81xx->scene = sia81xx->pre_scene;
+		}
+	}
+}
+
+static void sia81xx_pa_enable_l(int enable, int mode)
+{
+	sia81xx_pa_enable_by_scene(enable, mode, SIA81XX_CHANNEL_L);
+}
+
+static void sia81xx_pa_enable_r(int enable, int mode)
+{
+	sia81xx_pa_enable_by_scene(enable, mode, SIA81XX_CHANNEL_R);
+}
+#endif /* CONFIG_SND_SOC_OPLUS_PA_MANAGER */
 static int sipa_pvdd_limit_get(
 	struct snd_kcontrol *kcontrol,
 	struct snd_ctl_elem_value *ucontrol)
@@ -1657,6 +2045,13 @@ static int sipa_status_get(
 	return 0;
 }
 
+static int sipa_status_set(
+	struct snd_kcontrol *kcontrol,
+	struct snd_ctl_elem_value *ucontrol)
+{
+	return 0;
+}
+
 static int sipa_chip_type_get(
 	struct snd_kcontrol *kcontrol,
 	struct snd_ctl_elem_value *ucontrol)
@@ -1684,7 +2079,6 @@ static int sipa_chip_type_set(
 	return 0;
 }
 
-#ifdef SIA91XX_TYPE
 static int sipa_mute_get(
 	struct snd_kcontrol *kcontrol,
 	struct snd_ctl_elem_value *ucontrol)
@@ -1728,15 +2122,6 @@ static int sipa_mute_set(
 			si_pa->mute = SIPA_DEVICE_MUTE_OFF;
 		}
 	}
-
-	return 0;
-}
-#endif
-
-static int sipa_status_set(
-	struct snd_kcontrol *kcontrol,
-	struct snd_ctl_elem_value *ucontrol)
-{
 
 	return 0;
 }
@@ -1825,6 +2210,79 @@ static int sipa_reg_set(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
+#ifdef OPLUS_FEATURE_SPEAKER_MUTE
+// Add for spk mute ctrl
+int speaker_mute_control = 0;
+static char const *spk_mute_ctrl_text[] = {"Off", "On"};
+static const struct soc_enum spk_mute_ctrl_enum =
+	SOC_ENUM_SINGLE_EXT(ARRAY_SIZE(spk_mute_ctrl_text), spk_mute_ctrl_text);
+
+static int sipa_spk_mute_ctrl_get(struct snd_kcontrol *kcontrol,
+		struct snd_ctl_elem_value *ucontrol)
+{
+	ucontrol->value.integer.value[0] = speaker_mute_control;
+	return 0;
+}
+
+static int sipa_spk_mute_ctrl_put(struct snd_kcontrol *kcontrol,
+		struct snd_ctl_elem_value *ucontrol)
+{
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(4, 16, 28))
+	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	sipa_dev_t *si_pa = snd_soc_component_get_drvdata(component);
+#else
+	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
+	sipa_dev_t *si_pa = snd_soc_codec_get_drvdata(codec);
+#endif
+
+	int val = ucontrol->value.integer.value[0];
+
+	pr_warn("channle %d, Speaker mute set to %s\n", si_pa->channel_num, val == 1 ? "on" : "off");
+	speaker_mute_control = val;
+
+	if (speaker_mute_control == 1) {
+		if (si_pa &&
+			si_pa->mute == SIPA_DEVICE_MUTE_OFF &&
+			si_pa->scene == AUDIO_SCENE_RECEIVER &&
+			si_pa->channel_num == 0) {
+			pr_info("%s: is handset mode\n", __func__);
+			return 0;
+		}
+	}
+
+	if (si_pa) {
+		if (speaker_mute_control) {
+			if (true == si_pa->sipa_on ) {
+				if (false == sipa_regmap_get_chip_en(si_pa)) {
+					pr_info("[ info][%s] %s: chip_en is false, direct return!\n", LOG_FLAG, __func__);
+					return 0;
+				}
+				if (sia91xx_soft_mute(si_pa)) {
+					gpio_set_value(si_pa->rst_pin, 1);
+				}
+			}
+		} else {
+			if (true == si_pa->sipa_on) {
+				if (true == sipa_regmap_get_chip_en(si_pa)) {
+					pr_info("[ info][%s] %s: chip_en is true, direct return!\n", LOG_FLAG, __func__);
+					return 0;
+				}
+				sipa_reg_init(si_pa);
+				sia91xx_dsp_start(si_pa, SNDRV_PCM_STREAM_PLAYBACK);
+				sipa_regmap_check_trimming(si_pa);
+			}
+		}
+	}
+
+	return 0;
+}
+
+static const struct snd_kcontrol_new sipa_snd_control_spk_mute[] = {
+	SOC_ENUM_EXT("Speaker_Mute_Switch", spk_mute_ctrl_enum,
+					sipa_spk_mute_ctrl_get, sipa_spk_mute_ctrl_put),
+};
+#endif /* OPLUS_FEATURE_SPEAKER_MUTE */
+
 static const char *const power_function[] = { "Off", "On" };
 static const char *const reboot_function[] = { "Off", "On" };
 static const char *const audio_scene[] = { "Playback", "Voice", "MMI_Receiver", "Receiver", "MMI_SpeakerR", "MMI_SpeakerL" };
@@ -1837,7 +2295,6 @@ static const struct soc_enum audio_scene_enum =
 	SOC_ENUM_SINGLE_EXT(ARRAY_SIZE(audio_scene), audio_scene);
 
 static const struct snd_kcontrol_new sipa_controls[] = {
-
 	SOC_ENUM_EXT("Sipa Power", power_enum,
 			sipa_power_get, sipa_power_set),
 
@@ -1851,6 +2308,13 @@ static const struct snd_kcontrol_new sipa_controls[] = {
 	/* 2023/04/18, Add for smartpa err feedback. */
 	SOC_ENUM_EXT("SIA_CHECK_FEEDBACK", sia91xx_check_feedback_enum,
 			   sia91xx_get_check_feedback, sia91xx_set_check_feedback),
+
+	SOC_SINGLE_EXT("PA_BYPASS_FEEDBACK", SND_SOC_NOPM, 0, 0xff, 0,
+			sia91xx_get_bypass_feedback, sia91xx_set_bypass_feedback),
+
+	/* 2024/06/28, Add for smartpa vbatlow err check. */
+	SOC_SINGLE_EXT("PA Vbatlow Count", SND_SOC_NOPM, 0, 0xFFFF, 0,
+			sia91xx_get_vbatlow_cnt, NULL),
 #endif
 
 	SOC_SINGLE_EXT("Sipa Pvdd Limit", SND_SOC_NOPM, 0, 5000000, 0,
@@ -1864,13 +2328,10 @@ static const struct snd_kcontrol_new sipa_controls[] = {
 	SOC_SINGLE_EXT("Sipa Type", SND_SOC_NOPM, 0, 100, 0,
 			sipa_chip_type_get, sipa_chip_type_set),
 
-#ifdef SIA91XX_TYPE
 	SOC_SINGLE_EXT("Sipa Mute", SND_SOC_NOPM, 0, 1, 0,
 			sipa_mute_get, sipa_mute_set),
-#endif
 };
 
-#ifdef SIA91XX_TYPE
 static const struct snd_soc_dai_ops sia91xx_dai_ops = {
 	.startup = sia91xx_startup,
 	.set_fmt = sia91xx_set_fmt,
@@ -1899,7 +2360,6 @@ static struct snd_soc_dai_driver sia91xx_dai[] = {
 		 .ops = &sia91xx_dai_ops,
 	}
 };
-#endif
 
 static int sipa_spkr_pa_event(
 	struct snd_soc_dapm_widget *w,
@@ -1951,12 +2411,18 @@ static const struct snd_soc_dapm_widget sipa_dapm_widgets[] = {
 static int sipa_component_probe(
 	struct snd_soc_component *component)
 {
-    pr_info("[debug][%s] %s: running \r\n", LOG_FLAG, __func__);
-#ifdef SIA91XX_TYPE
-	sia91xx_component_probe(component);
-	//customer add controls
-	sia91xx_create_controls(component);
+	sipa_dev_t *si_pa = snd_soc_component_get_drvdata(component);
+	pr_info("[debug][%s] %s: running \r\n", LOG_FLAG, __func__);
+	if (IS_DIGITAL_PA_TYPE(si_pa->chip_type)) {
+		sia91xx_component_probe(component);
+		//customer add controls
+		sia91xx_create_controls(component);
+#ifdef OPLUS_FEATURE_SPEAKER_MUTE
+// Add for spk mute ctrl
+		snd_soc_add_component_controls(component, sipa_snd_control_spk_mute,
+									ARRAY_SIZE(sipa_snd_control_spk_mute));
 #endif
+	}
 	return 0;
 }
 
@@ -1970,13 +2436,13 @@ static void sipa_component_remove(
 static int sipa_codec_probe(
 	struct snd_soc_codec *codec)
 {
-    pr_info("[debug][%s] %s: running \r\n", LOG_FLAG, __func__);
-#ifdef SIA91XX_TYPE
-	sia91xx_codec_probe(codec);
-	//customer add controls
-	sia91xx_create_controls(&(codec->component));
-
-#endif
+	sipa_dev_t *si_pa = snd_soc_codec_get_drvdata(codec);
+	pr_info("[debug][%s] %s: running \r\n", LOG_FLAG, __func__);
+	if (IS_DIGITAL_PA_TYPE(si_pa->chip_type)) {
+		sia91xx_codec_probe(codec);
+		//customer add controls
+		sia91xx_create_controls(&(codec->component));
+	}
 	return 0;
 }
 
@@ -2172,6 +2638,7 @@ static unsigned int get_chip_type(const char *name)
 
 /* CHIP_TYPE_SIA81X9 */
 static const uint32_t sia81x9_list[] = {
+	CHIP_TYPE_SIA8157,
 	CHIP_TYPE_SIA8159,
 	CHIP_TYPE_SIA8159A,
 	CHIP_TYPE_SIA8109
@@ -2225,7 +2692,7 @@ static void sipa_set_rst(sipa_dev_t *si_pa, int value)
 {
 	unsigned long flags;
 
-	if (0 == si_pa->disable_pin) {
+	if (0 == si_pa->disable_pin && IS_NEED_PULL_RST_TYPE(si_pa->chip_type)) {
 		spin_lock_irqsave(&si_pa->rst_lock, flags);
 		gpio_set_value(si_pa->rst_pin, value);
 		mdelay(1);
@@ -2317,9 +2784,10 @@ int sipa_pending_actions(sipa_dev_t *si_pa)
 	si_pa->dyn_ud_vdd_port = extra_cfg.dyn_ud_vdd_port;
 	g_dyn_ud_vdd_port = extra_cfg.dyn_ud_vdd_port; //qcom need afe port 0x1004
 
-#ifndef SIA91XX_TYPE
-	sipa_owi_init(si_pa, chip_cfg.owi_mode);
-#endif
+	if (IS_SUPPORT_OWI_TYPE(si_pa->chip_type)) {
+		sipa_owi_init(si_pa, chip_cfg.owi_mode);
+	}
+
 
 	/* power down chip in any case when phone start up */
 	sipa_suspend(si_pa);
@@ -2330,13 +2798,80 @@ int sipa_pending_actions(sipa_dev_t *si_pa)
 	return 0;
 }
 
+#if IS_ENABLED(CONFIG_SND_SOC_OPLUS_PA_MANAGER)
+static int detect_i2c_slave(sipa_dev_t *sia81xx)
+{
+	unsigned long flags;
+	int rst_pin_value = 0;
+
+	if (0 == sia81xx->disable_pin) {
+		pr_debug("[debug][%s] %s: reset the chip! \r\n", LOG_FLAG, __func__);
+
+		spin_lock_irqsave(&sia81xx->rst_lock, flags);
+		gpio_set_value(sia81xx->rst_pin, SIA81XX_ENABLE_LEVEL);
+		spin_unlock_irqrestore(&sia81xx->rst_lock, flags);
+		mdelay(2);
+
+		spin_lock_irqsave(&sia81xx->rst_lock, flags);
+		rst_pin_value = gpio_get_value(sia81xx->rst_pin);
+		if (sia81xx->rst_pin < 0) {
+			pr_err("[ err] [%d] %s: rst-pin < o !!! \rin", sia81xx->rst_pin,__func__);
+		}
+		spin_unlock_irqrestore(&sia81xx->rst_lock, flags);
+		mdelay(2);
+
+		spin_lock_irqsave(&sia81xx->rst_lock, flags);
+		gpio_set_value(sia81xx->rst_pin, SIA81XX_DISABLE_LEVEL);
+		spin_unlock_irqrestore(&sia81xx->rst_lock, flags);
+		mdelay(3);
+
+		spin_lock_irqsave(&sia81xx->rst_lock, flags);
+		gpio_get_value(sia81xx->rst_pin);
+		rst_pin_value = gpio_get_value(sia81xx->rst_pin);
+		if (sia81xx->rst_pin < 0) {
+			pr_err("[ err] [%d] %s: rst-pin < o !!! \rin", sia81xx->rst_pin,__func__);
+		}
+		spin_unlock_irqrestore(&sia81xx->rst_lock, flags);
+		mdelay(2);
+
+		spin_lock_irqsave(&sia81xx->rst_lock, flags);
+		gpio_set_value(sia81xx->rst_pin, SIA81XX_ENABLE_LEVEL);
+		spin_unlock_irqrestore(&sia81xx->rst_lock, flags);
+		mdelay(2);/* wait chip power up, the time must be > 1ms */
+
+		spin_lock_irqsave(&sia81xx->rst_lock, flags);
+		gpio_get_value(sia81xx->rst_pin);
+		rst_pin_value = gpio_get_value(sia81xx->rst_pin);
+		if (sia81xx->rst_pin < 0) {
+			pr_err("[ err] [%d] %s: rst-pin < o !!! \rin", sia81xx->rst_pin,__func__);
+		}
+		spin_unlock_irqrestore(&sia81xx->rst_lock, flags);
+		mdelay(2);
+	}
+
+	if (0 != sipa_regmap_check_chip_id(sia81xx->regmap, sia81xx->channel_num, sia81xx->chip_type)) {
+		pr_warn("[ warn][%s] %s: sia81xx_regmap_check_chip_id failed !!! \r\n",
+			LOG_FLAG, __func__);
+		return -EINVAL;
+	}
+
+	gpio_set_value(sia81xx->rst_pin, SIA81XX_DISABLE_LEVEL);
+
+	return 0;
+}
+#endif /* CONFIG_SND_SOC_OPLUS_PA_MANAGER */
+
 #ifdef OPLUS_ARCH_EXTENDS
 /* 2023/03/05, Add for calibration */
 static ssize_t sipa_dbgfs_range_read(struct file *file,
 				char __user *user_buf, size_t count,
 				loff_t *ppos)
 {
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0))
 	struct i2c_client *i2c = file->private_data;
+#else
+	struct i2c_client *i2c = PDE_DATA(file_inode(file));
+#endif
 	sipa_dev_t *si_pa = (sipa_dev_t *)dev_get_drvdata(&i2c->dev);
 	char *str = NULL;
 	int ret = 0;
@@ -2350,45 +2885,119 @@ static ssize_t sipa_dbgfs_range_read(struct file *file,
         pr_err("[0x%x] memory allocation failed\n", si_pa->client->addr);
 		goto range_err;
 	}
-	ret = snprintf(str, PAGE_SIZE, " Min:%u mOhms, Max:%u mOhms\n",
-		si_pa->min_mohms, si_pa->max_mohms);
-	//pr_warning("%s addr 0x%x, str=%s\n", __func__, si_pa->client->addr, str);
+	ret = snprintf(str, PAGE_SIZE, " Min:%u mOhms, Max:%u mOhms, F0_MIN:%u, F0_MAX:%u\n",
+		si_pa->min_mohms, si_pa->max_mohms, si_pa->min_f0, si_pa->max_f0);
+	pr_info("%s addr 0x%x, str=%s\n", __func__, si_pa->client->addr, str);
 	ret = simple_read_from_buffer(user_buf, count, ppos, str, ret);
 	kfree(str);
 range_err:
 	return ret;
 }
 
+/*add for f0 cali*/
+static ssize_t sipa_proc_f0_cali_status_read(struct file *file,
+				char __user *user_buf, size_t count,
+				loff_t *ppos)
+{
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0))
+	struct i2c_client *i2c = file->private_data;
+#else
+	struct i2c_client *i2c = PDE_DATA(file_inode(file));
+#endif
+	struct device_node *sipa_of_node = NULL;
+	sipa_dev_t *si_pa = (sipa_dev_t *)dev_get_drvdata(&i2c->dev);
+	uint32_t rst = 0;
+	char f0_ch_to_user[sizeof(rst)+1] = {0};
+	int len = 0;
+	int ret = 0;
+	si_pa->need_f0_cali = 0;
+
+	sipa_of_node = of_parse_phandle(si_pa->client->dev.of_node, "si,sipa-dev", 0);
+	ret = of_property_read_u32(sipa_of_node, "oplus_need_f0_cali", &rst);
+	if (0 != ret) {
+		pr_err("[  err][%s] %s: get oplus_need_f0_cali return %d !!! \r\n",
+			LOG_FLAG, __func__, ret);
+		return -ENODEV;
+	}
+	si_pa->need_f0_cali = rst;
+	len = snprintf(f0_ch_to_user, sizeof(f0_ch_to_user), "%d", rst);
+	ret = simple_read_from_buffer(user_buf, count, ppos, &f0_ch_to_user, len);
+	pr_info("%s addr 0x%x, oplus_need_f0_cali rst=%d, f0_ch_to_user %s, ret=%d\n", __func__, si_pa->client->addr, rst, f0_ch_to_user, ret);
+
+	return ret;
+}
+
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0))
 static const struct file_operations sipa_dbgfs_range_fops = {
 	.open = simple_open,
 	.read = sipa_dbgfs_range_read,
 	.llseek = default_llseek,
 };
-
+/* f0 cali */
+static const struct file_operations sipa_proc_f0_cali_fops = {
+	.open = simple_open,
+	.read = sipa_proc_f0_cali_status_read,
+	.llseek = default_llseek,
+};
+#else
+static const struct proc_ops sipa_dbgfs_range_fops = {
+	.proc_open = simple_open,
+	.proc_read = sipa_dbgfs_range_read,
+	.proc_lseek = default_llseek,
+};
+/* f0 cali */
+static const struct proc_ops sipa_proc_f0_cali_fops = {
+	.proc_open = simple_open,
+	.proc_read = sipa_proc_f0_cali_status_read,
+	.proc_lseek = default_llseek,
+};
+#endif
 static void sipa_debug_init(sipa_dev_t *si_pa, struct i2c_client *i2c)
 {
 	char name[50];
 	scnprintf(name, MAX_CONTROL_NAME, "%s-%x", i2c->name, i2c->addr);
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0))
 	si_pa->dbg_dir = debugfs_create_dir(name, NULL);
 	debugfs_create_file("range", S_IRUGO, si_pa->dbg_dir,
 					i2c,&sipa_dbgfs_range_fops);
+	debugfs_create_file("need_f0_cali", S_IRUGO, si_pa->dbg_dir,
+					i2c,&sipa_proc_f0_cali_fops);
+#else
+	si_pa->dbg_dir = proc_mkdir(name, NULL);
+	proc_create_data("range", S_IRUGO, si_pa->dbg_dir,
+					&sipa_dbgfs_range_fops, i2c);
+        /*get f0 calib pa count*/
+	proc_create_data("need_f0_cali", S_IRUGO, si_pa->dbg_dir,
+					&sipa_proc_f0_cali_fops, i2c);
+#endif
 }
 #endif /* OPLUS_ARCH_EXTENDS */
 
-int sipa_i2c_probe(
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0))
+int sipa_i2c_v3_probe(
 	struct i2c_client *client,
 	const struct i2c_device_id *id)
+#else
+int sipa_i2c_v3_probe(
+	struct i2c_client *client)
+#endif
 {
 	sipa_dev_t *si_pa = NULL;
 	struct device_node	*sipa_of_node = NULL;
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 115)) && (LINUX_VERSION_CODE < KERNEL_VERSION(6, 2, 0))
+	char *sipa_fw_name = "sipa.bin";
+#else
 	char *sipa_fw_name = "../../../../odm/firmware/sipa.bin";
+#endif
 	int ret = 0;
 	int addr_offset = 0;
 	char buf[50] = {0};
+#if IS_ENABLED(CONFIG_SND_SOC_OPLUS_PA_MANAGER)
+	struct oplus_speaker_device *speaker_device = NULL;
+	bool new_speaker_device_node = false;
+#endif /* CONFIG_SND_SOC_OPLUS_PA_MANAGER */
 
-#ifdef SIA91XX_TYPE
 	struct snd_soc_dai_driver *dai = NULL;
-#endif
 
 	pr_info("[ info][%s] %s: i2c addr = 0x%02x \r\n",
 		LOG_FLAG, __func__, client->addr);
@@ -2452,57 +3061,121 @@ int sipa_i2c_probe(
 		g_default_sia_dev = si_pa;
 
 	sipa_compatible_chips_adapt(si_pa);
+#if IS_ENABLED(CONFIG_SND_SOC_OPLUS_PA_MANAGER)
+	if (!IS_DIGITAL_PA_TYPE(si_pa->chip_type)) {
+		speaker_device = get_speaker_dev(si_pa->channel_num + 1);
+		if(speaker_device == NULL) {
+			pr_info("[ info][%s] %s():speaker_device == null ,oplus_register start\r\n", LOG_FLAG, __func__);
+		}
+		pr_info("[ info][%s] %s():,oplus_register start\r\n", LOG_FLAG, __func__);
+		if ((detect_i2c_slave(si_pa) == 0) && (speaker_device == NULL)) {
 
-#ifdef SIA91XX_TYPE
-	ret = sia91xx_detect_chip(si_pa);
-	if (ret < 0) {
-		pr_err("[  err][%s] %s: sia91xx detect fail !!! \r\n", LOG_FLAG, __func__);
-		return ret;
+			speaker_device = kzalloc(sizeof(struct oplus_speaker_device), GFP_KERNEL);
+
+			if ((si_pa->channel_num == 0) && (speaker_device != NULL)) {
+				speaker_device->chipset = MFR_SI;
+				speaker_device->type = L_SPK;
+				speaker_device->vdd_need = 0;
+				speaker_device->speaker_enable_set = sia81xx_pa_enable_l;
+				speaker_device->boost_voltage_set = sia81xx_volme_boost_set;
+				speaker_device->boost_voltage_get = sia81xx_volme_boost_get;
+				speaker_device->spk_mode_set = sia81xx_audio_scene_set;
+				speaker_device->spk_mode_get = sia81xx_audio_scene_get;
+				speaker_device->speaker_mute_set = sia81xx_speaker_mute_set;
+				speaker_device->speaker_mute_get = sia81xx_speaker_mute_get;
+				oplus_pa_sia_node = oplus_speaker_pa_register(speaker_device);
+				kfree(speaker_device);
+				pr_info("[ info][%s] %s():,oplus_register end\r\n", LOG_FLAG, __func__);
+			} else if ((si_pa->channel_num == 1) && (speaker_device != NULL)) {
+				speaker_device->chipset = MFR_SI;
+				speaker_device->type = R_SPK;
+				speaker_device->vdd_need = 0;
+				speaker_device->speaker_enable_set = sia81xx_pa_enable_r;
+				speaker_device->boost_voltage_set = sia81xx_volme_boost_set;
+				speaker_device->boost_voltage_get = sia81xx_volme_boost_get;
+				speaker_device->spk_mode_set = sia81xx_audio_scene_set;
+				speaker_device->spk_mode_get = sia81xx_audio_scene_get;
+				speaker_device->speaker_mute_set = sia81xx_speaker_mute_set;
+				speaker_device->speaker_mute_get = sia81xx_speaker_mute_get;
+				oplus_pa_sia_node = oplus_speaker_pa_register(speaker_device);
+				kfree(speaker_device);
+				pr_info("[ info][%s] %s():,oplus_register end\r\n", LOG_FLAG, __func__);
+			}
+		} else {
+			if (speaker_device == NULL) {
+				speaker_device = kzalloc(sizeof(struct oplus_speaker_device), GFP_KERNEL);
+				new_speaker_device_node = true;
+				if (speaker_device != NULL ) {
+					speaker_device->type = si_pa->channel_num + 1;
+				} else {
+					pr_info("[ info][%s] %s():,speaker_device kzalloc fail\r\n", LOG_FLAG, __func__);
+				}
+			}
+
+			// there is AW87xxx, we only need the speaker protection algorithm
+			if ((si_pa->channel_num == 0) && (speaker_device != NULL)) {
+				speaker_device->speaker_protection_set = sia81xx_pa_enable_l;
+			} else if ((si_pa->channel_num == 1) && (speaker_device != NULL)) {
+				speaker_device->speaker_protection_set = sia81xx_pa_enable_r;
+			}
+			if (new_speaker_device_node == true) {
+				pr_info("[ info][%s] %s():,oplus_register speaker protection algorithm func\r\n", LOG_FLAG, __func__);
+				oplus_pa_sia_node = oplus_speaker_pa_register(speaker_device);
+			}
+			kfree(speaker_device);
+			pr_info("[ info][%s] %s():,oplus_register fail\r\n", LOG_FLAG, __func__);
+		}
+		pr_info("[ info][%s] %s: exit oplus_register \r\n", LOG_FLAG, __func__);
 	}
+#endif /* CONFIG_SND_SOC_OPLUS_PA_MANAGER */
+	if (IS_DIGITAL_PA_TYPE(si_pa->chip_type)) {
+		ret = sia91xx_detect_chip(si_pa);
+		if (ret < 0) {
+			pr_err("[  err][%s] %s: sia91xx detect fail !!! \r\n", LOG_FLAG, __func__);
+			return ret;
+		}
 
-	dai = devm_kzalloc(&client->dev, sizeof(sia91xx_dai), GFP_KERNEL);
-	if (NULL == dai)
-		return -ENOMEM;
+		dai = devm_kzalloc(&client->dev, sizeof(sia91xx_dai), GFP_KERNEL);
+		if (NULL == dai)
+			return -ENOMEM;
 
-	memcpy(dai, sia91xx_dai, sizeof(sia91xx_dai));
+		memcpy(dai, sia91xx_dai, sizeof(sia91xx_dai));
 
-	snprintf(buf, sizeof(buf), "sipa_i2c.%x-%04x", client->adapter->nr, client->addr);
-	ret = dev_set_name(&client->dev, buf);
-	if (ret < 0) {
-		pr_info( "dev_set_name ret=: %d\n", ret);
-		return ret;
-	}
-	pr_err("%s: dev_name = [%s]\n", __func__, dev_name(&client->dev));
+		snprintf(buf, sizeof(buf), "%s.%x-%04x", "sipa_i2c", client->adapter->nr, client->addr);
+		ret = dev_set_name(&client->dev,"%s", buf);
+		if (ret < 0) {
+			pr_info( "dev_set_name ret=: %d\n", ret);
+			return ret;
+		}
+		pr_err("%s: dev_name = [%s]\n", __func__, dev_name(&client->dev));
 
-	sia91xx_append_i2c_address(&client->dev,
-				client,
-				NULL,
-				0,
-				dai,
-				ARRAY_SIZE(sia91xx_dai));
+		sia91xx_append_i2c_address(&client->dev,
+					client,
+					NULL,
+					0,
+					dai,
+					ARRAY_SIZE(sia91xx_dai));
 
 #if (LINUX_VERSION_CODE > KERNEL_VERSION(4, 16, 28))
-	ret = devm_snd_soc_register_component(&client->dev,
-		&soc_component_dev_sipa, dai, ARRAY_SIZE(sia91xx_dai));
+		ret = devm_snd_soc_register_component(&client->dev,
+			&soc_component_dev_sipa, dai, ARRAY_SIZE(sia91xx_dai));
 #else
-	ret = snd_soc_register_codec(&client->dev,
-		&soc_codec_dev_sipa, dai, ARRAY_SIZE(sia91xx_dai));
+		ret = snd_soc_register_codec(&client->dev,
+			&soc_codec_dev_sipa, dai, ARRAY_SIZE(sia91xx_dai));
 #endif
 
-	if (ret < 0) {
-		dev_err(&client->dev, "Failed to register sia91xx: %d\n", ret);
-		return ret;
-	}
-
+		if (ret < 0) {
+			dev_err(&client->dev, "Failed to register sia91xx: %d\n", ret);
+			return ret;
+		}
 #ifdef OPLUS_ARCH_EXTENDS
 /* 2023/03/05, Add for calibration */
-	sipa_debug_init(si_pa, client);
+		sipa_debug_init(si_pa, client);
 #endif /* OPLUS_ARCH_EXTENDS */
+		pr_info("[info][%s] snd_soc_register_codec ret=%d!\n", __func__, ret);
+	}
 
-	pr_info("[info][%s] snd_soc_register_codec ret=%d!\n", __func__, ret);
-#endif
-
-	if (CHIP_TYPE_SIA8100X != si_pa->chip_type) {
+	if (CHIP_TYPE_UNKNOWN != si_pa->chip_type && !IS_SUPPORT_OWI_TYPE(si_pa->chip_type)) {
 		/* load firmware */
 		sipa_param_load_fw(&client->dev, sipa_fw_name);
 	}
@@ -2511,18 +3184,20 @@ int sipa_i2c_probe(
 
 	return 0;
 }
-EXPORT_SYMBOL(sipa_i2c_probe);
+EXPORT_SYMBOL(sipa_i2c_v3_probe);
 
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0))
-int sipa_i2c_remove(struct i2c_client *client)
+int sipa_i2c_v3_remove(struct i2c_client *client)
 #else
-void sipa_i2c_remove(struct i2c_client *client)
+void sipa_i2c_v3_remove(struct i2c_client *client)
 #endif
 {
 	sipa_dev_t *si_pa = NULL;
 
 	pr_info("[ info][%s] %s: remove \r\n", LOG_FLAG, __func__);
-
+#if IS_ENABLED(CONFIG_SND_SOC_OPLUS_PA_MANAGER)
+	oplus_speaker_pa_remove(oplus_pa_sia_node);
+#endif /* CONFIG_SND_SOC_OPLUS_PA_MANAGER */
 	si_pa = (sipa_dev_t *)dev_get_drvdata(&client->dev);
 	if (NULL == si_pa)
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0))
@@ -2545,26 +3220,24 @@ void sipa_i2c_remove(struct i2c_client *client)
 	return 0;
 #endif
 }
-EXPORT_SYMBOL(sipa_i2c_remove);
+EXPORT_SYMBOL(sipa_i2c_v3_remove);
 
-static const struct i2c_device_id si_sipa_i2c_id[] = {
+static const struct i2c_device_id si_sipa_v3_i2c_id[] = {
 	{ SIPA_I2C_NAME, 0 },
 	{ }
 };
 
 #ifdef CONFIG_OF
 static const struct of_device_id si_sipa_i2c_match[] = {
-#ifdef SIA91XX_TYPE
-	{.compatible = "si,sia81xx-i2c"},
-	{.compatible = "si,sia8101-i2c"},
-	{.compatible = "si,sia8109-i2c"},
-	{.compatible = "si,sia8152-i2c"},
-	{.compatible = "si,sia8152s-i2c"},
-	{.compatible = "si,sia8159-i2c"},
-	{.compatible = "si,sia81x9-i2c"},
-	{.compatible = "si,sia8152x-i2c"},
-#endif
-	{.compatible = "si,sia91xx-i2c"},
+	{.compatible = "si,sia81xx-i2c_v3"},
+	{.compatible = "si,sia8101-i2c_v3"},
+	{.compatible = "si,sia8109-i2c_v3"},
+	{.compatible = "si,sia8152-i2c_v3"},
+	{.compatible = "si,sia8152s-i2c_v3"},
+	{.compatible = "si,sia8159-i2c_v3"},
+	{.compatible = "si,sia81x9-i2c_v3"},
+	{.compatible = "si,sia8152x-i2c_v3"},
+	{.compatible = "si,sia91xx-i2c_v3"},
 	{},
 };
 #endif
@@ -2577,9 +3250,9 @@ static struct i2c_driver si_sipa_i2c_driver = {
 		.of_match_table = si_sipa_i2c_match,
 #endif
 	},
-	.probe		= sipa_i2c_probe,
-	.remove		= sipa_i2c_remove,
-	.id_table	= si_sipa_i2c_id,
+	.probe		= sipa_i2c_v3_probe,
+	.remove		= sipa_i2c_v3_remove,
+	.id_table	= si_sipa_v3_i2c_id,
 };
 
 /********************************************************************
@@ -2640,13 +3313,13 @@ static int sipa_property_init(struct device_node *sipa_of_node, sipa_dev_t *si_p
 	int en_dyn_id = 0;
 	int rst_pin = 0;
 	int id_pin = 0;
-#ifdef SIA91XX_TYPE
+
 	int irq_pin = 0;
 	int mute_mode = 0;
 	int en_irq_pin = 0;
-#else
+
 	int owi_pin = 0;
-#endif
+
 
 	/* get chip type name */
 	ret = of_property_read_string_index(sipa_of_node,
@@ -2703,47 +3376,57 @@ static int sipa_property_init(struct device_node *sipa_of_node, sipa_dev_t *si_p
 			return -ENODEV;
 		}
 
-#ifdef SIA91XX_TYPE
+		if (IS_DIGITAL_PA_TYPE(si_pa->chip_type)) {
 #ifdef OPLUS_ARCH_EXTENDS
 /* 2023/03/05, Add for calibration */
-        ret = of_property_read_u32(sipa_of_node, "sipa_min_range", &si_pa->min_mohms);
-        if (0 != ret) {
-            si_pa->min_mohms = SMART_PA_RANGE_DEFAULT_MIN;
-        }
+			ret = of_property_read_u32(sipa_of_node, "sipa_min_range", &si_pa->min_mohms);
+			if (0 != ret) {
+				si_pa->min_mohms = SMART_PA_RANGE_DEFAULT_MIN;
+			}
 
-        ret = of_property_read_u32(sipa_of_node, "sipa_max_range", &si_pa->max_mohms);
-        if (0 != ret) {
-            si_pa->max_mohms = SMART_PA_RANGE_DEFAULT_MAX;
-        }
+			ret = of_property_read_u32(sipa_of_node, "sipa_max_range", &si_pa->max_mohms);
+			if (0 != ret) {
+				si_pa->max_mohms = SMART_PA_RANGE_DEFAULT_MAX;
+			}
+/* 2024/07/04, Add for f0 calibration */
+			ret = of_property_read_u32(sipa_of_node, "sipa_f0_min_range", &si_pa->min_f0);
+			if (0 != ret) {
+				si_pa->min_f0 = SMART_PA_RANGE_DEFAULT_F0_MIN;
+			}
+
+			ret = of_property_read_u32(sipa_of_node, "sipa_f0_max_range", &si_pa->max_f0);
+			if (0 != ret) {
+				si_pa->max_f0 = SMART_PA_RANGE_DEFAULT_F0_MAX;
+			}
 #endif
+			ret = of_property_read_u32(sipa_of_node,
+				"si,si_pa_mute_mode", &mute_mode);
+			if (0 != ret) {
+				mute_mode = MUTE_MODE_EXTERNAL;
+			}
 
-		ret = of_property_read_u32(sipa_of_node,
-			"si,si_pa_mute_mode", &mute_mode);
-		if (0 != ret) {
-			mute_mode = MUTE_MODE_EXTERNAL;
+			ret = of_property_read_u32(sipa_of_node,
+					"en_irq_func", &en_irq_pin);
+			if ((0 != ret) || (1 != en_irq_pin)) {
+				si_pa->irq_pin = -1;
+				pr_warn("[ warn] %s: No IRQ GPIO provided.!\r\n", __func__);
+			} else {
+				irq_pin = of_get_named_gpio(sipa_of_node, "si,si_pa_irq", 0);
+				if (irq_pin < 0) {
+					pr_err("[  err][%s] %s: irq_pin < 0 !!! \r\n", LOG_FLAG, __func__);
+					return -ENODEV;
+				}
+				si_pa->irq_pin = irq_pin;
+			}
 		}
-
-		ret = of_property_read_u32(sipa_of_node,
-				"en_irq_func", &en_irq_pin);
-		if ((0 != ret) || (1 != en_irq_pin)) {
-			si_pa->irq_pin = -1;
-			pr_warn("[ warn] %s: No IRQ GPIO provided.!\r\n", __func__);
-		} else {
-			irq_pin = of_get_named_gpio(sipa_of_node, "si,si_pa_irq", 0);
-			if (irq_pin < 0) {
-				pr_err("[  err][%s] %s: irq_pin < 0 !!! \r\n", LOG_FLAG, __func__);
+		if (IS_SUPPORT_OWI_TYPE(si_pa->chip_type)) {
+			/* get owi pin's sn */
+			owi_pin = of_get_named_gpio(sipa_of_node, "si,si_pa_owi", 0);
+			if (owi_pin < 0) {
+				pr_err("[  err][%s] %s: owi_pin < 0 !!! \r\n", LOG_FLAG, __func__);
 				return -ENODEV;
 			}
-			si_pa->irq_pin = irq_pin;
 		}
-#else
-		/* get owi pin's sn */
-		owi_pin = of_get_named_gpio(sipa_of_node, "si,si_pa_owi", 0);
-		if (owi_pin < 0) {
-			pr_err("[  err][%s] %s: owi_pin < 0 !!! \r\n", LOG_FLAG, __func__);
-			return -ENODEV;
-		}
-#endif
 		if (1 == si_pa->en_dyn_id) {
 			/* get id pin's sn */
 			id_pin = of_get_named_gpio(sipa_of_node, "si,si_pa_id", 0);
@@ -2758,11 +3441,10 @@ static int sipa_property_init(struct device_node *sipa_of_node, sipa_dev_t *si_p
 
 	si_pa->rst_pin = rst_pin;
 
-#ifdef SIA91XX_TYPE
-	si_pa->mute_mode = mute_mode;
-#else
+	if (IS_DIGITAL_PA_TYPE(si_pa->chip_type)) {
+		si_pa->mute_mode = mute_mode;
+	}
 	si_pa->owi_pin = owi_pin;
-#endif
 
 	return 0;
 }
@@ -2800,23 +3482,23 @@ static int sipa_pinctrl_select(struct platform_device *pdev, sipa_dev_t *si_pa)
 			goto err;
 		}
 
-#ifdef SIA91XX_TYPE
-		if (si_pa->irq_pin > 0) {
-			pinctrl_state = pinctrl_lookup_state(si_pa_pinctrl, "si_pa_irq");
-			if (NULL == pinctrl_state) {
-				pr_err("[  err][%s] %s: NULL == pinctrl_state !!! \r\n", LOG_FLAG, __func__);
-				ret = -ENODEV;
-				goto err;
-			}
+		if (IS_DIGITAL_PA_TYPE(si_pa->chip_type)) {
+			if (si_pa->irq_pin > 0) {
+				pinctrl_state = pinctrl_lookup_state(si_pa_pinctrl, "si_pa_irq");
+				if (NULL == pinctrl_state) {
+					pr_err("[  err][%s] %s: NULL == pinctrl_state !!! \r\n", LOG_FLAG, __func__);
+					ret = -ENODEV;
+					goto err;
+				}
 
-			ret = pinctrl_select_state(si_pa_pinctrl, pinctrl_state);
-			if (0 != ret) {
-				pr_err("[  err][%s] %s: error pinctrl_select_state return %d \r\n", LOG_FLAG, __func__, ret);
-				ret = -ENODEV;
-				goto err;
+				ret = pinctrl_select_state(si_pa_pinctrl, pinctrl_state);
+				if (0 != ret) {
+					pr_err("[  err][%s] %s: error pinctrl_select_state return %d \r\n", LOG_FLAG, __func__, ret);
+					ret = -ENODEV;
+					goto err;
+				}
 			}
 		}
-#endif
 
 		if (1 == si_pa->en_dyn_id) {
 			pinctrl_state = pinctrl_lookup_state(si_pa_pinctrl, "si_pa_id");
@@ -2839,15 +3521,20 @@ static int sipa_pinctrl_select(struct platform_device *pdev, sipa_dev_t *si_pa)
 			gpio_direction_input(si_pa->id_pin);
 		}
 
-		/* set rst pin's direction */
-		gpio_direction_output(si_pa->rst_pin, SIA81XX_DISABLE_LEVEL);
 		/* set owi pin's direction */
-#ifdef SIA91XX_TYPE
-		if (gpio_is_valid(si_pa->irq_pin))
-			devm_gpio_request_one(&pdev->dev, si_pa->irq_pin, GPIOF_DIR_IN, "SIA91XX_INT");
-#else
-		gpio_direction_output(si_pa->owi_pin, OWI_POLARITY);
-#endif
+		if (IS_DIGITAL_PA_TYPE(si_pa->chip_type)) {
+			/* set rst pin's direction & high level */
+			gpio_direction_output(si_pa->rst_pin, SIA81XX_ENABLE_LEVEL);
+			if (gpio_is_valid(si_pa->irq_pin))
+				devm_gpio_request_one(&pdev->dev, si_pa->irq_pin, GPIOF_DIR_IN, "SIA91XX_INT");
+		}else{
+			/* set rst pin's direction & low level */
+			gpio_direction_output(si_pa->rst_pin, SIA81XX_DISABLE_LEVEL);
+		}
+		if (IS_SUPPORT_OWI_TYPE(si_pa->chip_type)) {
+			gpio_direction_output(si_pa->owi_pin, OWI_POLARITY);
+		}
+
 	}
 	si_pa->si_pa_pinctrl = si_pa_pinctrl;
 
@@ -2864,7 +3551,15 @@ static int sipa_probe(struct platform_device *pdev)
 	int ret = 0;
 	sipa_dev_t *si_pa = NULL;
 	char work_name[20];
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 115)) && (LINUX_VERSION_CODE < KERNEL_VERSION(6, 2, 0))
+	char *sipa_fw_name = "sipa.bin";
+#else
 	char *sipa_fw_name = "../../odm/firmware/sipa.bin";
+#endif
+#if IS_ENABLED(CONFIG_SND_SOC_OPLUS_PA_MANAGER)
+	struct oplus_speaker_device *speaker_device = NULL;
+	bool new_speaker_device_node = false;
+#endif /* CONFIG_SND_SOC_OPLUS_PA_MANAGER */
 
 	pr_info("[ info][%s] %s: probe \r\n", LOG_FLAG, __func__);
 
@@ -2894,7 +3589,6 @@ static int sipa_probe(struct platform_device *pdev)
 
 	si_pa->sipa_reboot = false;
 
-#ifndef SIA91XX_TYPE
 #if (LINUX_VERSION_CODE > KERNEL_VERSION(4, 16, 28))
 	ret = devm_snd_soc_register_component(&pdev->dev, &soc_component_dev_sipa, NULL, 0);
 #else
@@ -2905,7 +3599,7 @@ static int sipa_probe(struct platform_device *pdev)
 			LOG_FLAG, __func__);
 		goto out1;
 	}
-#endif
+
 
 	device_create_file(&pdev->dev, &dev_attr_sipa_cmd);
 
@@ -2923,10 +3617,71 @@ static int sipa_probe(struct platform_device *pdev)
 	if (!si_pa->sia91xx_wq)
 		return -ENOMEM;
 
-	if (CHIP_TYPE_SIA8100X == si_pa->chip_type) {
+	if (IS_SUPPORT_OWI_TYPE(si_pa->chip_type)) {
 		/* load firmware */
 		sipa_param_load_fw(&pdev->dev, sipa_fw_name);
 	}
+#if IS_ENABLED(CONFIG_SND_SOC_OPLUS_PA_MANAGER)
+	if (IS_SUPPORT_OWI_TYPE(si_pa->chip_type)) {
+		speaker_device = get_speaker_dev(si_pa->channel_num + 1);
+		if(speaker_device == NULL){
+			pr_info("[ info][%s] %s():speaker_device == null ,oplus_register start\r\n", LOG_FLAG, __func__);
+
+			speaker_device = kzalloc(sizeof(struct oplus_speaker_device), GFP_KERNEL);
+
+			if ((si_pa->channel_num == 0) && (speaker_device != NULL)) {
+				speaker_device->chipset = MFR_SI;
+				speaker_device->type = L_SPK;
+				speaker_device->vdd_need = 0;
+				speaker_device->speaker_enable_set = sia81xx_pa_enable_l;
+				speaker_device->boost_voltage_set = sia81xx_volme_boost_set;
+				speaker_device->boost_voltage_get = sia81xx_volme_boost_get;
+				speaker_device->spk_mode_set = sia81xx_audio_scene_set;
+				speaker_device->spk_mode_get = sia81xx_audio_scene_get;
+				speaker_device->speaker_mute_set = sia81xx_speaker_mute_set;
+				speaker_device->speaker_mute_get = sia81xx_speaker_mute_get;
+				oplus_pa_sia_node = oplus_speaker_pa_register(speaker_device);
+				pr_info("[ info][%s] %s():,oplus_register end1\r\n", LOG_FLAG, __func__);
+			} else if ((si_pa->channel_num == 1) && (speaker_device != NULL)) {
+				speaker_device->chipset = MFR_SI;
+				speaker_device->type = R_SPK;
+				speaker_device->vdd_need = 0;
+				speaker_device->speaker_enable_set = sia81xx_pa_enable_r;
+				speaker_device->boost_voltage_set = sia81xx_volme_boost_set;
+				speaker_device->boost_voltage_get = sia81xx_volme_boost_get;
+				speaker_device->spk_mode_set = sia81xx_audio_scene_set;
+				speaker_device->spk_mode_get = sia81xx_audio_scene_get;
+				speaker_device->speaker_mute_set = sia81xx_speaker_mute_set;
+				speaker_device->speaker_mute_get = sia81xx_speaker_mute_get;
+				oplus_pa_sia_node = oplus_speaker_pa_register(speaker_device);
+				pr_info("[ info][%s] %s():,oplus_register end2\r\n", LOG_FLAG, __func__);
+			}
+		} else {
+			if (speaker_device == NULL) {
+				speaker_device = kzalloc(sizeof(struct oplus_speaker_device), GFP_KERNEL);
+				new_speaker_device_node = true;
+				if (speaker_device != NULL ) {
+					speaker_device->type = si_pa->channel_num + 1;
+				} else {
+					pr_info("[ info][%s] %s():,speaker_device kzalloc fail\r\n", LOG_FLAG, __func__);
+				}
+			}
+
+			// there is AW87xxx, we only need the speaker protection algorithm
+			if ((si_pa->channel_num == 0) && (speaker_device != NULL)) {
+				speaker_device->speaker_protection_set = sia81xx_pa_enable_l;
+			} else if ((si_pa->channel_num == 1) && (speaker_device != NULL)) {
+				speaker_device->speaker_protection_set = sia81xx_pa_enable_r;
+			}
+			if (new_speaker_device_node == true) {
+				pr_info("[ info][%s] %s():,oplus_register speaker protection algorithm func\r\n", LOG_FLAG, __func__);
+				oplus_pa_sia_node = oplus_speaker_pa_register(speaker_device);
+			}
+			pr_info("[ info][%s] %s():,oplus_register fail\r\n", LOG_FLAG, __func__);
+		}
+		pr_info("[ info][%s] %s: exit oplus_register \r\n", LOG_FLAG, __func__);
+	}
+#endif /* CONFIG_SND_SOC_OPLUS_PA_MANAGER */
 	pr_info("[ info][%s] %s: finish, channel:%d\r\n", LOG_FLAG, __func__, si_pa->channel_num);
 
 	return 0;
@@ -2946,6 +3701,9 @@ static int sipa_remove(struct platform_device *pdev)
 	sipa_dev_t *si_pa = NULL;
 
 	pr_info("[ info][%s] %s: remove \r\n", LOG_FLAG, __func__);
+#if IS_ENABLED(CONFIG_SND_SOC_OPLUS_PA_MANAGER)
+	oplus_speaker_pa_remove(oplus_pa_sia_node);
+#endif /* CONFIG_SND_SOC_OPLUS_PA_MANAGER */
 
 	si_pa = (sipa_dev_t *)dev_get_drvdata(&pdev->dev);
 	if (NULL == si_pa)
@@ -2986,24 +3744,22 @@ static void sipa_shutdown(struct platform_device *pdev)
 
 #ifdef CONFIG_OF
 static const struct of_device_id si_sipa_dt_match[] = {
-#ifdef SIA91XX_TYPE
-	{ .compatible = "si,sia81xx" },
-	{ .compatible = "si,sia8100" },
-	{ .compatible = "si,sia8101" },
-	{ .compatible = "si,sia8109" },
-	{ .compatible = "si,sia8152" },
-	{ .compatible = "si,sia8152s" },
-	{ .compatible = "si,sia8159" },
-	{ .compatible = "si,sia81x9" },
-	{ .compatible = "si,sia8152x" },
-#endif
-	{ .compatible = "si,sia91xx" },
+	{ .compatible = "si,sia81xx_v3" },
+	{ .compatible = "si,sia8100_v3" },
+	{ .compatible = "si,sia8101_v3" },
+	{ .compatible = "si,sia8109_v3" },
+	{ .compatible = "si,sia8152_v3" },
+	{ .compatible = "si,sia8152s_v3" },
+	{ .compatible = "si,sia8159_v3" },
+	{ .compatible = "si,sia81x9_v3" },
+	{ .compatible = "si,sia8152x_v3" },
+	{ .compatible = "si,sia91xx_v3" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, si_sipa_dt_match);
 #endif
 
-static struct platform_driver si_sipa_dev_driver = {
+static struct platform_driver si_sipa_dev_v3_driver = {
 	.probe  = sipa_probe,
 	.remove = sipa_remove,
 	.shutdown = sipa_shutdown,
@@ -3028,7 +3784,7 @@ static int __init sipa_pa_init(void)
 	pr_info("[ info][%s] %s: si_pa driver version : %s \r\n",
 		LOG_FLAG, __func__, SIPA_DRIVER_VERSION);
 
-	ret = platform_driver_register(&si_sipa_dev_driver);
+	ret = platform_driver_register(&si_sipa_dev_v3_driver);
 	if (ret) {
 		pr_err("[  err][%s] %s: si_sipa_dev error, ret = %d !!! \r\n",
 			LOG_FLAG, __func__, ret);
@@ -3050,7 +3806,7 @@ static void __exit sipa_pa_exit(void)
 	pr_info("[ info][%s] %s: running \r\n", LOG_FLAG, __func__);
 
 	i2c_del_driver(&si_sipa_i2c_driver);
-	platform_driver_unregister(&si_sipa_dev_driver);
+	platform_driver_unregister(&si_sipa_dev_v3_driver);
 }
 
 module_init(sipa_pa_init);

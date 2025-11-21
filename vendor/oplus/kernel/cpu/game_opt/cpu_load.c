@@ -19,17 +19,15 @@
 
 #include "game_ctrl.h"
 
-#define KHZ_PER_MHZ 1000
-
 struct time_in_state {
 	spinlock_t lock;
 	u64 last_read;
 	u64 last_update;
-	unsigned int *freq_table; /* mHz */
+	unsigned int *freq_table;
 	u64 *time;
 	unsigned int time_array_size;
 	unsigned int time_byte_size;
-	unsigned int max_freq; /* mHz */
+	unsigned int max_freq;
 	unsigned int max_freq_state;
 	unsigned int max_idle_state;
 	/* 0=active 1=idle */
@@ -62,16 +60,6 @@ static void inline reset_cur_state_after_read(struct time_in_state *icpu, u64 no
 {
 	memset(icpu->time, 0, icpu->time_byte_size);
 	icpu->last_read = icpu->last_update = now;
-}
-
-static int cpufreq_table_get_index(struct time_in_state *stats, unsigned int freq)
-{
-	int index;
-	freq /= KHZ_PER_MHZ;
-	for (index = 0; index < stats->max_freq_state; index++)
-		if (stats->freq_table[index] == freq)
-			return index;
-	return -1;
 }
 
 static void get_cpu_load(int cpu, int *util_pct, int *busy_pct)
@@ -129,11 +117,9 @@ static void time_in_state_update_idle(int cpu, unsigned int new_idle_index)
 	spin_unlock_irqrestore(&icpu->lock, flags);
 }
 
-static void time_in_state_update_freq(struct cpumask *cpus,
-			       unsigned int new_freq)
+static void time_in_state_update_freq(struct cpumask *cpus, int new_freq_index)
 {
 	int cpu;
-	unsigned int new_freq_index;
 	struct time_in_state *icpu = NULL;
 	u64 now;
 	unsigned long flags;
@@ -142,8 +128,9 @@ static void time_in_state_update_freq(struct cpumask *cpus,
 		return;
 
 	icpu = per_cpu_ptr(&stats_info, cpumask_first(cpus));
-	new_freq_index = cpufreq_table_get_index(icpu, new_freq);
-	if (new_freq_index < 0 || new_freq_index >= icpu->max_freq_state)
+	if (new_freq_index >= icpu->max_freq_state)
+		return;
+	if (new_freq_index == icpu->cur_freq_idx)
 		return;
 
 	now = ktime_to_us(ktime_get());
@@ -180,11 +167,16 @@ static void android_vh_cpu_idle_exit(void *unused, int state, struct cpuidle_dev
 static void android_vh_cpufreq_fast_switch(void *data, struct cpufreq_policy *policy,
 		unsigned int *target_freq, unsigned int old_target_freq)
 {
+	int new_freq_index;
+
 	if (!need_stat_cpu_load())
 		return;
 
-	if (*target_freq != policy->cur)
-		time_in_state_update_freq(policy->cpus, *target_freq);
+	new_freq_index = cpufreq_table_find_index_l(policy, *target_freq);
+	if (new_freq_index < 0)
+		return;
+
+	time_in_state_update_freq(policy->cpus, new_freq_index);
 }
 
 static int time_in_state_init(void)
@@ -205,7 +197,7 @@ static int time_in_state_init(void)
 		if (ret != 0)
 			goto err_out;
 
-		icpu->max_freq = policy.cpuinfo.max_freq / KHZ_PER_MHZ;
+		icpu->max_freq = policy.cpuinfo.max_freq;
 
 		count = cpufreq_table_count_valid_entries(&policy);
 		if (!count)
@@ -224,10 +216,10 @@ static int time_in_state_init(void)
 
 		i = 0;
 		cpufreq_for_each_valid_entry(pos, policy.freq_table)
-			icpu->freq_table[i++] = pos->frequency / KHZ_PER_MHZ;
+			icpu->freq_table[i++] = pos->frequency;
 
-		freq_index = cpufreq_table_get_index(icpu, policy.cur);
-		if (freq_index < 0)
+		freq_index = cpufreq_table_find_index_l(&policy, policy.cur);
+		if ((freq_index < 0) || (freq_index >= count))
 			goto err_out;
 		icpu->cur_freq_idx = freq_index;
 
@@ -256,16 +248,28 @@ err_out:
 	return 0;
 }
 
+static DEFINE_MUTEX(cl_mutex);
+
 static int cpu_load_show(struct seq_file *m, void *v)
 {
 	int cpu;
-	int util_pct = 0, busy_pct = 0;
+	int util_pct = 60, busy_pct = 90;
+	bool just_init = false;
+
+	mutex_lock(&cl_mutex);
+
+	if (!initialized) {
+		time_in_state_init();
+		just_init = true;
+	}
 
 	for_each_possible_cpu(cpu) {
-		if (need_stat_cpu_load())
+		if (need_stat_cpu_load() && !just_init)
 			get_cpu_load(cpu, &util_pct, &busy_pct);
 		seq_printf(m, "CPU:%d busy_pct:%d util_pct:%d\n", cpu, busy_pct, util_pct);
 	}
+
+	mutex_unlock(&cl_mutex);
 
 	return 0;
 }
@@ -286,8 +290,6 @@ int cpu_load_init(void)
 {
 	if (unlikely(!game_opt_dir))
 		return -ENOTDIR;
-
-	time_in_state_init();
 
 	proc_create_data("cpu_load", 0444, game_opt_dir, &cpu_load_proc_ops, NULL);
 

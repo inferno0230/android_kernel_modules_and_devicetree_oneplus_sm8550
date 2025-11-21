@@ -24,7 +24,9 @@
 #ifdef OPLUS_FEATURE_DISPLAY_ADFR
 #include "../oplus/oplus_adfr.h"
 #endif /* OPLUS_FEATURE_DISPLAY_ADFR */
-
+#ifdef OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT
+#include "../oplus/oplus_onscreenfingerprint.h"
+#endif /* OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT */
 #ifdef OPLUS_FEATURE_DISPLAY
 #include "../oplus/oplus_display_panel_feature.h"
 #endif
@@ -221,7 +223,15 @@ static void dsi_bridge_pre_enable(struct drm_bridge *bridge)
 		       c_bridge->id, rc);
 		return;
 	}
+#ifdef OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT
+	mutex_lock(&c_bridge->display->display_lock);
+	oplus_panel_switch_vid_mode_post(c_bridge->display, &(c_bridge->dsi_mode));
+	mutex_unlock(&c_bridge->display->display_lock);
 
+	if (oplus_ofp_is_supported() && oplus_ofp_video_mode_30hz_aod_is_enabled()) {
+		oplus_ofp_video_mode_refresh_flag_update(&(c_bridge->dsi_mode));
+	}
+#endif /* OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT */
 	if (c_bridge->dsi_mode.dsi_mode_flags &
 		(DSI_MODE_FLAG_SEAMLESS | DSI_MODE_FLAG_VRR |
 		 DSI_MODE_FLAG_DYN_CLK)) {

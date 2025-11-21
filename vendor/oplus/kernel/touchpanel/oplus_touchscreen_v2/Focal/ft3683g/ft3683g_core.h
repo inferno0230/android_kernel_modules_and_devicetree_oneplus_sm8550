@@ -43,6 +43,9 @@
 #define FTS_REG_FOD_INFO_LEN                    9
 #define FTS_REG_AOD_INFO                        0xD3
 #define FTS_REG_AOD_INFO_LEN                    6
+#define FTS_REG_DIFFER_VERSION                	0xCD
+#define FTS_DIFFER_VERSION_V1                	0
+#define FTS_DIFFER_VERSION_V2                	1
 
 #define FTS_REG_INT_CNT                         0x8F
 #define FTS_REG_FLOW_WORK_CNT                   0x91
@@ -67,6 +70,7 @@
 #define FTS_FW_INFO                             0x96
 #define FTS_REG_TEMPERATURE                     0x97
 #define FTS_REG_PALM_TO_SLEEP_STATUS            0x9B
+#define FTS_REG_INJECT_WDT_RESET                0xB6
 #define FTS_REG_FREQUENCE_WATER_MODE			0xBF
 
 #define FTS_REG_GESTURE_OUTPUT_ADDRESS          0xD3
@@ -76,7 +80,9 @@
 #define FTS_REG_SAMSUNG_SPECIFAL                0xFA
 #define FTS_REG_HEALTH_1                        0xFD
 #define FTS_REG_HEALTH_2                        0xFE
-
+#define FTS_REG_HEALTH_BASELINE                 0x03
+#define FTS_REG_GLOVE_MODE_SWITCH               0xC0
+#define FTS_REG_EDGE_LIMIT_SWITCH               0xCE
 #define FTS_120HZ_REPORT_RATE                   0x0C
 #define FTS_180HZ_REPORT_RATE                   0x12
 #define FTS_240HZ_REPORT_RATE                   0x18
@@ -97,15 +103,18 @@
 #define FTS_POINTS_ONE                          21  /*2 + 6*3 + 1*/
 #define FTS_POINTS_TWO                          41  /*8*10 - 1*/
 #define FTS_MAX_POINTS_LENGTH                   134  /* ((FTS_POINTS_ONE) + (FTS_POINTS_TWO))  */
-#define FTS_MAX_POINTS_SNR_LENGTH               1784 /* FTS_MAX_POINTS_LENGTH + 2 + 2*tx*rx + (tx+rx+4)*2*2 */
+#define FTS_MAX_POINTS_SNR_LENGTH               1824 /* FTS_MAX_POINTS_LENGTH + 2 + 2*tx*rx + (tx+rx+4)*2*2 */
+#define FTS_MAX_POINTS_SNR_LENGTH_V2            2220 /* point_buffer:84 + status:10 + edge:40 + aux:18 + differ:tx*rx*2+(tx+rx)*2*2+2 + 8*rx+2 */
 #define FTS_REG_POINTS                          0x01
 #define FTS_REG_POINTS_N                        (FTS_POINTS_ONE + 1)
 #define FTS_REG_POINTS_LB                       0x3E
+#define FTS_MAX_TX_NUM                          20
+#define FTS_MAX_RX_NUM                          41
 
 #define FTS_MAX_TOUCH_BUF                       4096
 
-#define FTS_DIFF_BUF_LENGTH                     702 /* tx*rx */
-#define FTS_SC_BUF_LENGTH                       57 /* tx+rx */
+#define FTS_DIFF_BUF_LENGTH                     720 /* tx*rx */
+#define FTS_SC_BUF_LENGTH                       58 /* tx+rx */
 
 #define FTS_GESTURE_DATA_LEN                    28
 
@@ -216,6 +225,8 @@
 #define INTELLIGENT_GAME_MODE                   11
 #define EXTREME_GAME_MODE                       12
 
+#define FTS_POINTER_BUFFER_LEN                  150
+#define FTS_EDG_BUFFER_LEN                      200
 enum _FTS_RST_REASON {
 	FTS_RST_REASON_UNKNOWN  = 0,
 	FTS_RST_REASON_FWUPDATE = 0x01,
@@ -300,6 +311,15 @@ enum FOD_HEALTH_INFO {
 	FOD_DETECT_EFFETIVE_AREA 	= 0x22,
 	FOD_DETECT_ID_REPORRE    	= 0x30,
 };
+
+enum DEBUG_INFO {
+	RESET_TYPE		= 84,
+	DOWN_THD		= 85,
+	UP_THD			= 86,
+	IDLE_THD		= 87,
+	MAX_DIFF_H8		= 88,
+	MAX_DIFF_L8		= 89,
+};
 struct fts_aod_info {
 	u8 gesture_id;
 	u8 point_num;
@@ -322,7 +342,7 @@ struct chip_data_ft3683g {
 	bool touch_analysis_support;
 	bool ft3683_grip_v2_support;
 	bool is_ic_sleep;    /*ic sleep status*/
-	u32 touch_size;
+	u16 touch_size;
 	u8 *touch_buf;
 	int ta_flag;
 	u32 ta_size;
@@ -334,10 +354,14 @@ struct chip_data_ft3683g {
 	u8 fp_down;
 	u8 ctrl_reg_state;
 
-	u8 snr_buf[FTS_MAX_POINTS_SNR_LENGTH];
+	u8 snr_buf[FTS_MAX_POINTS_SNR_LENGTH_V2];
 	int diff_buf[FTS_DIFF_BUF_LENGTH];
 	int sc_water[FTS_SC_BUF_LENGTH];
 	int sc_nomal[FTS_SC_BUF_LENGTH];
+	u16 cur_noise;
+	u16 buffer_len;
+	u32 time_since_last_frame;
+	u32 frame_cnt;
 
 	int rl_cnt;
 	int scb_cnt;
@@ -352,15 +376,20 @@ struct chip_data_ft3683g {
 	int *scap_rawdata;
 	int *rawdata_linearity;
 	int tp_index;
+	int print_count;
 	int *node_valid;
 	int *node_valid_sc;
 	int gesture_state;
 	int tp_temperature;
 	int freq_point;
+	int glove_mode_flag;
 	bool black_gesture_indep;
 	u8 fre_num;
 	u8 snr_count;
 	u8 differ_mode;
+	u8 tp_differ_version;
+
+	u8 gesture_flag;
 
 	char *test_limit_name;
 	char *fw_name;

@@ -20,6 +20,11 @@
 #include <linux/page-flags.h>
 #include <linux/debugfs.h>
 #include <linux/memcontrol.h>
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_OSVELTE)
+#include "../../mm_osvelte/mm-config.h"
+#endif /* CONFIG_OPLUS_FEATURE_MM_OSVELTE */
+
+#include "level_protect.h"
 
 #ifdef CONFIG_MAPPED_PROTECT_ALL
 #define MAPCOUNT_PROTECT_THRESHOLD (20)
@@ -195,6 +200,12 @@ static void page_should_be_protect(void *data, struct page* page,
 				return;
 			}
 		}
+	}
+#endif
+
+#ifdef CONFIG_OPLUS_SMART_STORAGE
+	if (file && page_should_be_level_protect(page, should_protect)) {
+		return;
 	}
 #endif
 
@@ -659,6 +670,15 @@ static int __init mapped_protect_init(void)
 #ifdef CONFIG_MAPPED_PROTECT_ALL
 	int retry = 0;
 #endif
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_OSVELTE)
+	struct config_ezreclaimd *config_ezr;
+
+	config_ezr = oplus_read_mm_config(module_name_ezreclaimd);
+	if (config_ezr && config_ezr->enable) {
+		pr_info("%s is disabled by EZR\n", __func__);
+		return 0;
+	}
+#endif /* CONFIG_OPLUS_FEATURE_MM_OSVELTE */
 
 	ret = register_mapped_protect_vendor_hooks();
 	if (ret != 0)
@@ -695,6 +715,9 @@ retry_get_num_mapcpount:
 	enable_entry = proc_create("fg_protect_enable", 0666, NULL, &fg_mapcount_enable_ops);
 	protect_count_entry = proc_create("fg_protect_count", 0666, NULL, &fg_protect_count_ops);
 #endif
+#ifdef CONFIG_OPLUS_SMART_STORAGE
+	level_protect_proc_init();
+#endif
 
 #endif
 	pr_info("mapped_protect_init succeed!\n");
@@ -705,8 +728,10 @@ static void __exit mapped_protect_exit(void)
 {
 	unregister_mapped_protect_vendor_hooks();
 	remove_proc_entry("mapped_protect_show", NULL);
+#ifdef CONFIG_OPLUS_SMART_STORAGE
+	level_protect_proc_remove();
+#endif
 	pr_info("mapped_protect_exit exit succeed!\n");
-
 	return;
 }
 

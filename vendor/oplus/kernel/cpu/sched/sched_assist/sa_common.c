@@ -22,7 +22,7 @@
 #include <linux/thread_info.h>
 #include <linux/profile.h>
 #include <linux/kprobes.h>
-
+#include <linux/cgroup.h>
 #ifdef CONFIG_OPLUS_FEATURE_SCHED_SPREAD
 #include <linux/cpuhotplug.h>
 #endif /* CONFIG_OPLUS_FEATURE_SCHED_SPREAD */
@@ -39,6 +39,13 @@
 #include <../kernel/oplus_cpu/sched/frame_boost/frame_group.h>
 #endif
 
+#if IS_ENABLED(CONFIG_OPLUS_SCHED_TUNE)
+#include <../kernel/oplus_cpu/sched/sched_tune/tune.h>
+#endif
+
+#if IS_ENABLED(CONFIG_OPLUS_SCHED_GROUP_OPT)
+#include "sa_group.h"
+#endif
 #include "sched_assist.h"
 #include "sa_common.h"
 #include "sa_priority.h"
@@ -57,8 +64,7 @@
 #include "sa_exec.h"
 
 #define CREATE_TRACE_POINTS
-#include <trace_sched_assist.h>
-
+#include "trace_sched_assist.h"
 #define MS_TO_NS (1000000)
 #define MAX_INHERIT_GRAN ((u64)(64 * MS_TO_NS))
 
@@ -70,6 +76,22 @@
 #define inherit_ux_get_bits(value, type)	((value & inherit_ux_mask_of(type)) >> inherit_ux_offset_of(type))
 #define inherit_ux_value(type, value)		((u64)value << inherit_ux_offset_of(type))
 
+#define SCHED_MAX_CPUSET 100ULL
+#define SCHED_MAX_CPUCTL 100ULL
+#define SCHED_MAX_CFS_R 1000ULL
+#define SCHED_MAX_RT_R 10ULL
+#define SCHED_MAX_AFFINITY_MASK 1000ULL
+#define MAX_PID (32768)
+#define CPUCTL_MULT_UNIT (SCHED_MAX_CPUSET)
+#define CFS_R_MULT_UNIT (CPUCTL_MULT_UNIT * SCHED_MAX_CPUCTL)
+#define RT_R_MULT_UNIT (CFS_R_MULT_UNIT * SCHED_MAX_CFS_R)
+#define AFFINITY_MASK_MULT_UNIT (RT_R_MULT_UNIT * SCHED_MAX_RT_R)
+#define AFFINITY_SET_MULT_UNIT (AFFINITY_MASK_MULT_UNIT * SCHED_MAX_AFFINITY_MASK)
+#define SCHED_MAX_UCLAMP_MIN 1000ULL
+#define SCHED_MAX_UCLAMP_MAX 1000ULL
+#define SCHED_MAX_STUNE 1000ULL
+#define UCLAMP_MAX_MULT_UNIT (SCHED_MAX_UCLAMP_MIN)
+#define STUNE_MULT_UNIT (UCLAMP_MAX_MULT_UNIT * SCHED_MAX_UCLAMP_MAX)
 /* debug print frequency limit */
 static DEFINE_PER_CPU(int, prev_ux_state);
 static DEFINE_PER_CPU(int, prev_ux_priority);
@@ -77,6 +99,8 @@ static DEFINE_PER_CPU(u64, prev_vruntime);
 static DEFINE_PER_CPU(u64, prev_min_vruntime);
 static DEFINE_PER_CPU(u64, prev_preset_vruntime);
 static DEFINE_PER_CPU(int, prev_hwbinder_flag);
+static DEFINE_PER_CPU(u64, prev_sched_info);
+static DEFINE_PER_CPU(u64, prev_qs_info);
 
 #if IS_ENABLED(CONFIG_SCHED_WALT)
 #define WINDOW_SIZE (16000000)
@@ -87,6 +111,12 @@ static DEFINE_PER_CPU(int, prev_hwbinder_flag);
 #define TOPAPP 4
 #define BGAPP  3
 #define FGAPP 2
+
+/* to avoid there is no schedtune_task_boost symbol , we need define a weak symbol here*/
+__attribute__((weak)) int schedtune_task_boost(struct task_struct *p)
+{
+        return 0;
+}
 
 bool is_top(struct task_struct *p)
 {
@@ -313,6 +343,7 @@ void update_ux_sched_cputopo(void)
 	build_oplus_cpu_array();
 #endif
 }
+EXPORT_SYMBOL(update_ux_sched_cputopo);
 
 bool task_is_runnable(struct task_struct *task)
 {
@@ -362,7 +393,6 @@ bool is_mid_cluster(int cpu)
 {
 	return !(is_min_cluster(cpu) || is_max_cluster(cpu));
 }
-EXPORT_SYMBOL(update_ux_sched_cputopo);
 
 #if IS_ENABLED(CONFIG_OPLUS_FEATURE_PIPELINE)
 extern bool oplus_pipeline_task_skip_ux_change(struct oplus_task_struct *ots, int *ux_state);
@@ -393,18 +423,23 @@ extern bool oplus_pipeline_task_skip_ux_change(struct oplus_task_struct *ots, in
  *    RELEASE(ux_list->lock)
 
 */
-void oplus_set_ux_state_lock(struct task_struct *t, int ux_state, bool need_lock_rq)
+void oplus_set_ux_state_lock(struct task_struct *t, int ux_state, int inherit_type, bool need_lock_rq)
 {
 	struct rq *rq;
 	struct rq_flags flags;
 	struct oplus_rq *orq;
 	struct oplus_task_struct *ots;
 	unsigned long irqflag;
+	bool need_lock_pi = (inherit_type == INHERIT_UX_PIFUTEX) ? false : true;
 
-	if (need_lock_rq)
+	if (need_lock_rq && need_lock_pi) {
 		rq = task_rq_lock(t, &flags);
-	else
+	} else if (need_lock_rq && !need_lock_pi) {
+		lockdep_assert_held(&t->pi_lock);
+		rq = __task_rq_lock(t, &flags);
+	} else {
 		rq = task_rq(t);
+	}
 
 	if (!raw_spin_is_locked(&t->pi_lock)) {
 		DEBUG_BUG_ON(1);
@@ -412,6 +447,7 @@ void oplus_set_ux_state_lock(struct task_struct *t, int ux_state, bool need_lock
 	if (!raw_spin_is_locked(__rq_lockp(rq))) {
 		DEBUG_BUG_ON(2);
 	}
+
 	ots = get_oplus_task_struct(t);
 
 	if (IS_ERR_OR_NULL(ots))
@@ -427,23 +463,56 @@ void oplus_set_ux_state_lock(struct task_struct *t, int ux_state, bool need_lock
 		goto out;
 	}
 
+	if (inherit_type == INHERIT_UX_PIFUTEX)
+		goto set;
 #if IS_ENABLED(CONFIG_OPLUS_FEATURE_PIPELINE)
 	if (oplus_pipeline_task_skip_ux_change(ots, &ux_state))
 		goto out;
 #endif
 
+set:
 	orq = (struct oplus_rq *) rq->android_oem_data1;
+	/* BUG 6523080
+	* 1. task T is migrating from rq1 -> rq2
+	* 2. set task T ux state to 0 without locking rq1
+		spin_lock(rq1 -> ux_list_lock)
+		remove it from rq1
+		ots->ux_priority = -1
+		spin_unlock(rq1 -> ux_list_lock)
+	* 3. task T mirgated to rq2 with ots->ux_priority = -1
+		spin_lock(rq2 -> ux_list_lock)
+		enqueue task T
+		spin_unlock(rq2 -> ux_list_lock)
+	* 4. brk access -> ux_prio_to_weight[ots->ux_priority]
+	*/
+
+	/* BUG 6523080
+	* 0. task T run on rq1
+	* 1. task T put into sleep with ux state = 2 (not in any ux list)
+	* 2. task T awake, and putting into rq2
+	* 3. task T set ux state to 0 (it will lock the rq1)
+	* 4. now task T in rq2 with ux_state = 0, and ux_priority = -1
+	*/
+
+	/* BUG 6523080
+	* 0. task T run on rq1
+	* 1. set task T ux state to 0 without locking rq1
+	* 2. task migrated to rq2
+	* 2. task T tick on rq2 (may reorder the ux tree)
+	* 3. now task T in rq2 with ux_state = 0, and ux_priority = -1
+	*/
 	spin_lock_irqsave(orq->ux_list_lock, irqflag);
 	smp_mb__after_spinlock();
 	ots->ux_state = ux_state;
 
 	if (!(ux_state & SCHED_ASSIST_UX_MASK)) {
+		if (unlikely(task_current(rq, t))) {
+			/* if current's ux turn to off, it is likely to resched for this rq */
+			resched_curr(rq);
+		}
 		if (!oplus_rbnode_empty(&ots->ux_entry)) {
 			lockdep_assert_rq_held(rq);
 			update_ux_timeline_task_removal(orq, ots);
-			if (task_current(rq, t) && (!oplus_rbtree_empty(&orq->ux_list))) {
-				resched_curr(rq);
-			}
 			put_task_struct(t);
 			/* make sure task is removed from the list before ux_priority set to invalid */
 			smp_wmb();
@@ -466,6 +535,7 @@ void oplus_set_ux_state_lock(struct task_struct *t, int ux_state, bool need_lock
 
 			initial_prio_nice_and_vruntime(orq, ots, ux_state_to_priority(ux_state), ux_state_to_nice(ux_state));
 			insert_task_to_ux_timeline(ots, orq);
+			save_task_vruntime_delta(t, ots);
 		} else {
 			update_ux_timeline_task_change(orq, ots, ux_state_to_priority(ux_state), ux_state_to_nice(ux_state));
 		}
@@ -483,9 +553,12 @@ void oplus_set_ux_state_lock(struct task_struct *t, int ux_state, bool need_lock
 	}
 	spin_unlock_irqrestore(orq->ux_list_lock, irqflag);
 
-	out:
-	if (need_lock_rq)
+out:
+	if (need_lock_rq && need_lock_pi) {
 		task_rq_unlock(rq, t, &flags);
+	} else if (need_lock_rq && !need_lock_pi) {
+		__task_rq_unlock(rq, &flags);
+	}
 }
 EXPORT_SYMBOL_GPL(oplus_set_ux_state_lock);
 
@@ -493,6 +566,15 @@ noinline int tracing_mark_write(const char *buf)
 {
 	trace_printk(buf);
 	return 0;
+}
+
+int is_vip_mvp(struct task_struct *p)
+{
+	struct oplus_task_struct *ots = get_oplus_task_struct(p);
+	if (IS_ERR_OR_NULL(ots))
+		return false;
+
+	return atomic_read(&ots->is_vip_mvp);
 }
 
 void ux_state_systrace_c(unsigned int cpu, struct task_struct *p)
@@ -505,6 +587,9 @@ void ux_state_systrace_c(unsigned int cpu, struct task_struct *p)
 		ux_state = SCHED_UX_STATE_DEBUG_MAGIC;
 	else
 		ux_state = (oplus_get_ux_state(p) & (SCHED_ASSIST_UX_MASK | SA_TYPE_INHERIT | SCHED_ASSIST_UX_PRIORITY_MASK));
+
+	if (is_vip_mvp(p))
+		ux_state |= SA_TYPE_MQ_VIP;
 
 	if (per_cpu(prev_ux_state, cpu) != ux_state) {
 		char buf[256];
@@ -570,6 +655,77 @@ void ux_priority_systrace_c(unsigned int cpu, struct task_struct *t)
 	}
 }
 
+void sched_info_systrace_c(unsigned int cpu, struct task_struct *p)
+{
+	struct rq *rq = cpu_rq(cpu);
+	struct cfs_rq *cfs_rq = &rq->cfs;
+	struct rt_rq *rt_rq = &rq->rt;
+	unsigned int cfs_running = cfs_rq->h_nr_running;
+	unsigned int rt_running = rt_rq->rt_nr_running;
+	struct oplus_task_struct *ots = get_oplus_task_struct(p);
+	u64 s_info = 0;
+	char buf[256];
+	struct css_set *cset;
+	int cpu_cid, cpuset_cid;
+
+	cset = task_css_set(p);
+	cpu_cid = cset->subsys[cpu_cgrp_id] ? cset->subsys[cpu_cgrp_id]->id : 0;
+	cpuset_cid = cset->subsys[cpuset_cgrp_id] ? cset->subsys[cpuset_cgrp_id]->id : 0;
+
+	if (cpu_cid >= SCHED_MAX_CPUCTL)
+		cpu_cid = 0;
+	if (cpuset_cid >= SCHED_MAX_CPUSET)
+		cpuset_cid = 0;
+
+	cfs_running = min(cfs_running, (unsigned int)SCHED_MAX_CFS_R - 1);
+	rt_running = min(rt_running, (unsigned int)SCHED_MAX_RT_R - 1);
+
+	s_info += cpuset_cid;
+	s_info += cpu_cid * CPUCTL_MULT_UNIT;
+	s_info += cfs_running * CFS_R_MULT_UNIT;
+	s_info += rt_running * RT_R_MULT_UNIT;
+	s_info += ((u8)cpumask_bits(&p->cpus_mask)[0]) * AFFINITY_MASK_MULT_UNIT;
+	if (cpumask_weight(&p->cpus_mask) < nr_cpu_ids) {
+		if (ots && likely(test_bit(OTS_STATE_SET_AFFINITY, &ots->state))
+			&& ots->affinity_pid > 0 && ots->affinity_pid < PID_MAX_LIMIT)
+			s_info += ((u64)ots->affinity_pid) * AFFINITY_SET_MULT_UNIT;
+	}
+
+	if (per_cpu(prev_sched_info, cpu) != s_info) {
+		snprintf(buf, sizeof(buf), "C|9999|Cpu%d_sched_info|%llu\n", cpu, s_info);
+		tracing_mark_write(buf);
+		per_cpu(prev_sched_info, cpu) = s_info;
+	}
+}
+
+void qs_info_systrace_c(unsigned int cpu, struct task_struct *p)
+{
+	unsigned int uclamp_min = 0, uclamp_max = 0;
+	unsigned int stune_boost = 0;
+	u64 s_info = 0;
+	char buf[256];
+
+	uclamp_min = uclamp_eff_value(p, UCLAMP_MIN);
+	uclamp_max = uclamp_eff_value(p, UCLAMP_MAX);
+/*
+#if IS_ENABLED(CONFIG_OPLUS_SCHED_TUNE)
+	stune_boost = schedtune_task_boost(p) + 100;
+#endif
+*/
+	uclamp_min = min(uclamp_min, (unsigned int)SCHED_MAX_UCLAMP_MIN - 1);
+	uclamp_max = min(uclamp_max, (unsigned int)SCHED_MAX_UCLAMP_MAX - 1);
+	stune_boost = min(stune_boost, (unsigned int)SCHED_MAX_STUNE - 1);
+
+	s_info += uclamp_min;
+	s_info += uclamp_max * UCLAMP_MAX_MULT_UNIT;
+	s_info += stune_boost * STUNE_MULT_UNIT;
+
+	if (per_cpu(prev_qs_info, cpu) != s_info) {
+		snprintf(buf, sizeof(buf), "C|9999|Cpu%d_qs_info|%llu\n", cpu, s_info);
+		tracing_mark_write(buf);
+		per_cpu(prev_qs_info, cpu) = s_info;
+	}
+}
 void sa_scene_systrace_c(void)
 {
 	static int prev_ux_scene;
@@ -747,7 +903,7 @@ void set_im_flag_with_bit(int im_flag, struct task_struct *task)
 		return;
 	if (im_flag <= IM_FLAG_CLEAR) {
 		set_bit(im_flag, &ots->im_flag);
-	} else {
+	} else { /* im_flag > 64 means clear relative bimap which is im_flag - 64 */
 		clear_bit((im_flag - IM_FLAG_CLEAR), &ots->im_flag);
 	}
 }
@@ -924,6 +1080,7 @@ static void enqueue_ux_thread(struct rq *rq, struct task_struct *p)
 			update_vruntime_task_attach(orq, ots);
 		}
 		insert_task_to_ux_timeline(ots, orq);
+		save_task_vruntime_delta(p, ots);
 	}
 	spin_unlock_irqrestore(orq->ux_list_lock, irqflag);
 }
@@ -1045,10 +1202,18 @@ void set_inherit_ux(struct task_struct *task, int type, int depth, int inherit_v
 	if (!task || type >= INHERIT_UX_MAX)
 		return;
 
-	if (!test_task_is_fair(task)) {
-		return;
-	}
+	/*
+	 * For PIFUTEX, &task may inherit rt prio but would lose it soon after unlock,
+	 * at this case, we should check fair_class with it's ->normal_prio but not ->prio.
+	 * do this check in caller.
+	 */
+	if (type == INHERIT_UX_PIFUTEX)
+		goto set;
 
+	if (!test_task_is_fair(task))
+		return;
+
+set:
 	inherit_ux_inc(task, type);
 	oplus_set_ux_depth(task, depth + 1);
 
@@ -1056,7 +1221,8 @@ void set_inherit_ux(struct task_struct *task, int type, int depth, int inherit_v
 		inherit_val &= (~SA_TYPE_LISTPICK);
 		inherit_val |= SA_TYPE_HEAVY;
 	}
-	oplus_set_ux_state_lock(task, (inherit_val & SCHED_ASSIST_UX_MASK) | SA_TYPE_INHERIT, true);
+
+	oplus_set_ux_state_lock(task, (inherit_val & SCHED_ASSIST_UX_MASK) | SA_TYPE_INHERIT, type, true);
 	oplus_set_inherit_ux_start(task, jiffies_to_nsecs(jiffies));
 	trace_inherit_ux_set(task, type, oplus_get_ux_state(task), oplus_get_inherit_ux(task), oplus_get_ux_depth(task));
 }
@@ -1079,7 +1245,7 @@ void reset_inherit_ux(struct task_struct *inherit_task, struct task_struct *ux_t
 
 	ux_state = (oplus_get_ux_state(inherit_task) & ~SCHED_ASSIST_UX_MASK) | reset_inherit;
 	oplus_set_ux_depth(inherit_task, reset_depth + 1);
-	oplus_set_ux_state_lock(inherit_task, ux_state, true);
+	oplus_set_ux_state_lock(inherit_task, ux_state, reset_type, true);
 	trace_inherit_ux_reset(inherit_task, reset_type, oplus_get_ux_state(inherit_task),
 		oplus_get_inherit_ux(inherit_task), oplus_get_ux_depth(inherit_task));
 }
@@ -1108,8 +1274,8 @@ void unset_inherit_ux_value(struct task_struct *task, int type, int value)
 		return;
 
 	ots->ux_depth = 0;
-	oplus_set_ux_state_lock(task, 0, true);
 
+	oplus_set_ux_state_lock(task, 0, type, true);
 	trace_inherit_ux_unset(task, type, oplus_get_ux_state(task), oplus_get_inherit_ux(task), oplus_get_ux_depth(task));
 }
 EXPORT_SYMBOL_GPL(unset_inherit_ux_value);
@@ -1119,54 +1285,6 @@ void unset_inherit_ux(struct task_struct *task, int type)
 	unset_inherit_ux_value(task, type, 1);
 }
 EXPORT_SYMBOL_GPL(unset_inherit_ux);
-
-bool endwith(char *str, char *s)
-{
-	int len1 = strlen(str), len2 = strlen(s);
-	if (len1 < len2)
-		return false;
-	return !strcmp(str + len1 - len2, s);
-}
-
-bool is_ui_thread(char *comm, struct task_struct *p)
-{
-	if (strcmp(p->group_leader->comm, "m.taobao.taobao"))
-		return false;
-
-	return isdigit(*comm) && endwith(comm, ".ui");
-}
-
-bool im_mali(char *comm)
-{
-	return !strcmp(comm, "mali-event-hand") ||
-		!strcmp(comm, "mali-mem-purge") || !strcmp(comm, "mali-cpu-comman") ||
-		!strcmp(comm, "mali-compiler") ||
-		!strcmp(comm, "mali-cmar-backe");
-}
-
-bool cgroup_check_set_sched_assist_boost(char *comm, struct task_struct *p)
-{
-	return im_mali(comm) || is_ui_thread(comm, p);
-}
-
-void cgroup_set_sched_assist_boost_task(struct task_struct *p, char *comm)
-{
-	int ux_state;
-	unsigned long im_flag;
-
-	if (cgroup_check_set_sched_assist_boost(comm, p)) {
-		ux_state = oplus_get_ux_state(p);
-		/* maybe the ux state is set by fwk hook, not oomadj */
-		if (is_top(p) || is_fg(p) || test_task_ux(p->group_leader)) {
-			im_flag = oplus_get_im_flag(p->group_leader);
-			if (test_bit(IM_FLAG_LAUNCHER, &im_flag))
-				oplus_set_ux_state_lock(p, (ux_state | SA_TYPE_LIGHT), true);
-			else
-				oplus_set_ux_state_lock(p, (ux_state | SA_TYPE_HEAVY), true);
-		} else
-			oplus_set_ux_state_lock(p, (ux_state & ~SA_TYPE_HEAVY), true);
-	}
-}
 
 void clear_all_inherit_type(struct task_struct *p)
 {
@@ -1178,7 +1296,7 @@ void clear_all_inherit_type(struct task_struct *p)
 
 	atomic64_set(&ots->inherit_ux, 0);
 	ots->ux_depth = 0;
-	oplus_set_ux_state_lock(p, 0, true);
+	oplus_set_ux_state_lock(p, 0, -1, true);
 }
 
 int get_max_inherit_gran(struct task_struct *p)
@@ -1188,6 +1306,23 @@ int get_max_inherit_gran(struct task_struct *p)
 
 	return MAX_INHERIT_GRAN;
 }
+
+#ifndef CONFIG_OPLUS_SYSTEM_KERNEL_QCOM
+bool im_mali(const char *comm)
+{
+	if (!strncmp(comm, "mali-", 5)) {
+		const char *postfix = comm + 5;
+		return !strcmp(postfix, "event-hand") ||
+			!strcmp(postfix, "mem-purge") || !strcmp(postfix, "cpu-comman") ||
+			!strcmp(postfix, "compiler") || !strcmp(postfix, "cmar-backe");
+	}
+	return false;
+}
+#else
+inline bool im_mali(const char *comm) {
+	return false;
+}
+#endif
 
 void sched_assist_target_comm(struct task_struct *task, const char *buf)
 {
@@ -1205,15 +1340,19 @@ void sched_assist_target_comm(struct task_struct *task, const char *buf)
 	}
 #endif
 
-	/*set mali-event-handle ux when task fork*/
-	cgroup_set_sched_assist_boost_task(task, comm);
+#ifndef CONFIG_OPLUS_SYSTEM_KERNEL_QCOM
+	/* mali-event-handle need to keep ux enduringly */
+	if (im_mali(comm)) {
+		oplus_set_ux_state_lock(task, SA_TYPE_LIGHT, -1, true);
+	}
+#endif
 
 	/*set audio task ux in bilibili*/
 	if (task->group_leader &&
 		unlikely(strcmp(task->group_leader->comm, "tv.danmaku.bili"))) {
 		if (!strncmp(comm, "ff_audio_dec", 12)) {
 			ux_state = oplus_get_ux_state(task);
-			oplus_set_ux_state_lock(task, (ux_state | SA_TYPE_LIGHT), true);
+			oplus_set_ux_state_lock(task, (ux_state | SA_TYPE_LIGHT), -1, true);
 		}
 	}
 
@@ -1224,20 +1363,14 @@ void sched_assist_target_comm(struct task_struct *task, const char *buf)
 	if (!strncmp(comm, "AudioOutputDevi", 15) && task->group_leader &&
 		strstr(task->group_leader->comm, "vilege_process0")) {
 		ux_state = oplus_get_ux_state(task);
-		oplus_set_ux_state_lock(task, (ux_state | SA_TYPE_LIGHT), true);
+		oplus_set_ux_state_lock(task, (ux_state | SA_TYPE_LIGHT), -1, true);
 	}
 #ifdef CONFIG_OPLUS_CAMERA_UX
 	if (CAMERA_UID == task_uid(task).val) {
 		if (!strncmp(comm, CAMERA_PROVIDER_NAME, 15)) {
 			ux_state = oplus_get_ux_state(task);
-			oplus_set_ux_state_lock(task, (ux_state | SA_TYPE_HEAVY), true);
+			oplus_set_ux_state_lock(task, (ux_state | SA_TYPE_HEAVY), -1, true);
 		}
-	}
-#endif
-#ifdef CONFIG_OPLUS_CAMERA_UX
-	if (!strncmp(comm, "C2OMXNode", 15) || !strncmp(comm, "MP4WtrAudTrkThr", 15) || !strncmp(comm, "MP4WtrVidTrkThr", 15)) {
-			ux_state = oplus_get_ux_state(task);
-			oplus_set_ux_state_lock(task, (ux_state | SA_TYPE_ANIMATOR), true);
 	}
 #endif
 }
@@ -1265,6 +1398,22 @@ void adjust_rt_lowest_mask(struct task_struct *p, struct cpumask *local_cpu_mask
 	drop_cpu = cpumask_first(local_cpu_mask);
 	while (drop_cpu < nr_cpu_ids) {
 		int ux_task_state;
+
+		/*
+		 * Note:
+		 * There may be situations where cpus_mask and cpus_ptr are
+		 * not equal, we need to filter out this scenario here.
+		 */
+		if (!cpumask_test_cpu(drop_cpu, &p->cpus_mask) ||
+			!cpumask_test_cpu(drop_cpu, p->cpus_ptr)) {
+			cpumask_clear_cpu(drop_cpu, local_cpu_mask);
+			drop_cpu = cpumask_next(drop_cpu, local_cpu_mask);
+			pr_info("BUG: task=%s$%d$%d, cpus_mask=[%*pbl], cpus_ptr=[%*pbl]\n",
+				p->comm, p->pid, p->prio,
+				cpumask_pr_args(&p->cpus_mask),
+				cpumask_pr_args(p->cpus_ptr));
+			continue;
+		}
 
 		/* unlocked access */
 		rq = cpu_rq(drop_cpu);
@@ -1315,11 +1464,7 @@ void adjust_rt_lowest_mask(struct task_struct *p, struct cpumask *local_cpu_mask
 				trace_printk("clear cpu from lowestmask, curr_heavy task=%-12s pid=%d drop_cpu=%d\n", task->comm, task->pid, drop_cpu);
 		}
 
-#ifdef CONFIG_OPLUS_SCHED_MT6895
 		if (ux_task_state & SA_TYPE_HEAVY) {
-#else
-		if (sched_assist_scene(SA_LAUNCH) && (ux_task_state & SA_TYPE_HEAVY)) {
-#endif
 			cpumask_clear_cpu(drop_cpu, local_cpu_mask);
 			if (unlikely(global_debug_enabled & DEBUG_FTRACE))
 				trace_printk("clear cpu from lowestmask, curr_heavy task=%-12s pid=%d drop_cpu=%d\n", task->comm, task->pid, drop_cpu);
@@ -1555,6 +1700,8 @@ void android_rvh_schedule_handler(void *unused, struct task_struct *prev, struct
 
 	if (unlikely(global_debug_enabled & DEBUG_SYSTRACE) && likely(prev != next)) {
 		ux_state_systrace_c(cpu_of(rq), next);
+		sched_info_systrace_c(cpu_of(rq), next);
+		qs_info_systrace_c(cpu_of(rq), next);
 	}
 
 #ifdef CONFIG_LOCKING_PROTECT
@@ -1622,7 +1769,6 @@ static inline void do_boost_kill_task(struct task_struct *p)
 		cpumask_copy(&p->cpus_mask, boost_mask);
 		p->nr_cpus_allowed = cpumask_weight(boost_mask);
 	}
-
 }
 
 void android_vh_exit_signal_handler(void *unused, struct task_struct *p)
@@ -1657,21 +1803,6 @@ struct notifier_block process_exit_notifier_block = {
 
 void android_vh_cgroup_set_task_handler(void *unused, int ret, struct task_struct *task)
 {
-	struct task_struct *p;
-
-	if (!ret) {
-		rcu_read_lock();
-		if (task == task->group_leader) {
-			p = task;
-			do {
-				if (unlikely(im_mali(task->comm))) {
-					cgroup_set_sched_assist_boost_task(task, task->comm);
-					break;
-				}
-			} while_each_thread(p, task);
-		}
-		rcu_read_unlock();
-	}
 }
 
 #if IS_ENABLED(CONFIG_OPLUS_FEATURE_BAN_APP_SET_AFFINITY)
@@ -1679,7 +1810,7 @@ void android_vh_sched_setaffinity_early_handler(void *unused, struct task_struct
 {
 	unsigned long im_flag = IM_FLAG_NONE;
 	int curr_uid = current_uid().val;
-
+	curr_uid = curr_uid % PER_USER_RANGE;
 	if ((curr_uid < FIRST_APPLICATION_UID) || (curr_uid > LAST_APPLICATION_UID))
 		return;
 
@@ -1700,3 +1831,9 @@ void android_vh_sched_setaffinity_early_handler(void *unused, struct task_struct
 }
 #endif
 
+#if IS_ENABLED(CONFIG_OPLUS_SCHED_GROUP_OPT)
+void android_rvh_cpu_cgroup_online_handler(void *unused, struct cgroup_subsys_state *css)
+{
+	oplus_update_tg_map(css);
+}
+#endif

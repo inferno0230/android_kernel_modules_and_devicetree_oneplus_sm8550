@@ -46,65 +46,22 @@ int __fbg_set_task_preferred_cluster(pid_t tid, int cluster_id)
 }
 EXPORT_SYMBOL_GPL(__fbg_set_task_preferred_cluster);
 
-bool fbg_cluster_boost(struct task_struct *p, int *target_cpu)
+/* The interface is currently offered for use in games. */
+struct oplus_sched_cluster *fbg_get_task_preferred_cluster(struct task_struct *p)
 {
-	struct oplus_task_struct *ots = get_oplus_task_struct(p);
 	unsigned long flags;
 	int preferred_cluster_id;
-	struct oplus_sched_cluster *preferred_cluster;
-	struct cpumask *preferred_cpus;
-	cpumask_t search_cpus = CPU_MASK_NONE;
-	int iter_cpu;
-	int active_cpu = -1;
-	int max_spare_cap_cpu = -1;
-	unsigned long spare_cap = 0, max_spare_cap = 0;
+	struct oplus_task_struct *ots = get_oplus_task_struct(p);
 
-	if (IS_ERR_OR_NULL(ots))
-		return false;
 	if (likely(atomic_read(&user_interested_tgid) != p->tgid))
-		return false;
+		return NULL;
 
 	raw_spin_lock_irqsave(&preferred_cluster_id_lock, flags);
 	preferred_cluster_id = ots->preferred_cluster_id;
 	raw_spin_unlock_irqrestore(&preferred_cluster_id_lock, flags);
 
 	if (preferred_cluster_id < 0 || preferred_cluster_id >= num_sched_clusters)
-		return false;
+		return NULL;
 
-	preferred_cluster = fb_cluster[preferred_cluster_id];
-	preferred_cpus = &preferred_cluster->cpus;
-	cpumask_and(&search_cpus, &p->cpus_mask, cpu_active_mask);
-#ifdef CONFIG_OPLUS_ADD_CORE_CTRL_MASK
-	if (fbg_cpu_halt_mask)
-		cpumask_andnot(&search_cpus, &search_cpus, fbg_cpu_halt_mask);
-#endif
-	cpumask_and(&search_cpus, &search_cpus, preferred_cpus);
-
-	for_each_cpu(iter_cpu, &search_cpus) {
-		if (active_cpu == -1)
-			active_cpu = iter_cpu;
-
-		if (available_idle_cpu(iter_cpu) || (iter_cpu == task_cpu(p) && p->__state == TASK_RUNNING)) {
-			max_spare_cap_cpu = iter_cpu;
-			break;
-		}
-
-		spare_cap = max_t(long, capacity_of(iter_cpu) - cpu_util_without(iter_cpu, p), 0);
-		if (spare_cap > max_spare_cap) {
-			max_spare_cap = spare_cap;
-			max_spare_cap_cpu = iter_cpu;
-		}
-	}
-
-	if (max_spare_cap_cpu == -1)
-		max_spare_cap_cpu = active_cpu;
-
-	if ((max_spare_cap_cpu == -1)
-		|| ((cpumask_weight(&search_cpus) == 1) && (!available_idle_cpu(max_spare_cap_cpu)))) {
-		return false;
-	}
-
-	*target_cpu = max_spare_cap_cpu;
-
-	return true;
+	return fb_cluster[preferred_cluster_id];
 }

@@ -62,8 +62,8 @@ void oplus_root_check_succ(uid_t uid, uid_t euid, uid_t egid, uid_t callnum)
 
 	dcs_event = (struct kernel_packet_info*)dcs_stack;
 	dcs_event->type = 0;
-	strncpy(dcs_event->log_tag, dcs_event_tag, sizeof(dcs_event->log_tag));
-	strncpy(dcs_event->event_id, dcs_event_id, sizeof(dcs_event->event_id));
+	strlcpy(dcs_event->log_tag, dcs_event_tag, sizeof(dcs_event->log_tag));
+	strlcpy(dcs_event->event_id, dcs_event_id, sizeof(dcs_event->event_id));
 	dcs_event_payload = kmalloc(256, GFP_ATOMIC);
 	if (NULL == dcs_event_payload){
 		return;

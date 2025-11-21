@@ -3,6 +3,7 @@ ccflags-y += -I$(srctree)/drivers/misc/mediatek/include/
 ccflags-y += -I$(srctree)/drivers/misc/mediatek/pwm/pwm_v2/include/
 endif # !CONFIG_OPLUS_SENSOR_CONSUMER_IR_MTK
 
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/wl2866d/
 oplus_bsp_ir_core-y := oplus_ir_core.o
 obj-$(CONFIG_OPLUS_SENSOR_CONSUMER_IR_CORE)	+= oplus_bsp_ir_core.o
 

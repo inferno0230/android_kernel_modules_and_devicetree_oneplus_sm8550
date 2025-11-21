@@ -47,7 +47,8 @@ void android_vh_dup_task_struct_handler(void *unused,
 		struct task_struct *tsk, struct task_struct *orig)
 {
 	int node;
-	struct oplus_task_struct *ots = NULL;
+	struct oplus_task_struct *ots;
+	struct oplus_task_struct *orig_ots;
 
 	if (!tsk || !orig)
 		return;
@@ -62,10 +63,19 @@ void android_vh_dup_task_struct_handler(void *unused,
 		return;
 	}
 
+	atomic_set(&ots->is_vip_mvp, 0);
 	ots->task = tsk;
 #if IS_ENABLED(CONFIG_ARM64_AMU_EXTN) && IS_ENABLED(CONFIG_OPLUS_FEATURE_CPU_JANKINFO)
 	ots->uid_struct = NULL;
 #endif
+	/* if thread fork from RenderThread, inherit its IM_FLAG_RENDER_THREAD */
+	orig_ots = get_oplus_task_struct(orig);
+	if (!IS_ERR_OR_NULL(orig_ots)) {
+		if (test_bit(IM_FLAG_RENDER_THREAD, &orig_ots->im_flag) && !strcmp(orig->comm, "RenderThread")) {
+			set_bit(IM_FLAG_RENDER_THREAD, &ots->im_flag);
+		}
+	}
+
 	smp_mb();
 
 	WRITE_ONCE(tsk->android_oem_data1[OTS_IDX], (u64) ots);
@@ -101,10 +111,17 @@ void android_vh_free_task_handler(void *unused, struct task_struct *tsk)
 	RB_CLEAR_NODE(&ots->ux_entry);
 	RB_CLEAR_NODE(&ots->exec_time_node);
 	list_del_init(&ots->fbg_list);
+	atomic_set(&ots->is_vip_mvp, 0);
 	ots->task = NULL;
 #if IS_ENABLED(CONFIG_ARM64_AMU_EXTN) && IS_ENABLED(CONFIG_OPLUS_FEATURE_CPU_JANKINFO)
 	ots->uid_struct = NULL;
 #endif
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_QOS_SCHED)
+	ots->qos_level = -1;
+	ots->qos_recover_prio = -2;
+#endif
+
 	smp_mb();
 
 	free_oplus_task_struct(ots);
@@ -150,6 +167,7 @@ static void init_oplus_task_struct(void *ptr)
 	ots->lb_state = 0;
 	ots->ld_flag = 0;
 #endif
+	cpumask_clear(&ots->cpus_requested);
 	ots->target_process = -1;
 	ots->update_running_start_time = false;
 #if IS_ENABLED(CONFIG_OPLUS_LOCKING_STRATEGY)
@@ -176,6 +194,13 @@ static void init_oplus_task_struct(void *ptr)
 #if IS_ENABLED(CONFIG_OPLUS_FEATURE_PIPELINE)
 	atomic_set(&ots->pipeline_cpu, -1);
 #endif
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_QOS_SCHED)
+	ots->qos_level = -1;
+	ots->qos_recover_prio = -2;
+	mutex_init(&ots->qs_mutex);
+#endif
+
 	raw_spin_lock_init(&ots->fbg_list_entry_lock);
 	ots->preferred_cluster_id = -1;
 	ots->fbg_depth = -1;

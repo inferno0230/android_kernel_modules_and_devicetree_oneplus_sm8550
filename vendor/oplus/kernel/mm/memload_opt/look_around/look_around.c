@@ -16,6 +16,9 @@
 #include <trace/hooks/cgroup.h>
 #include <trace/hooks/sys.h>
 #include <trace/hooks/mm.h>
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_OSVELTE)
+#include "../../mm_osvelte/mm-config.h"
+#endif /* CONFIG_OPLUS_FEATURE_MM_OSVELTE */
 
 #define LOOK_AROUND_MAX 8
 
@@ -215,6 +218,15 @@ static int look_around_show(struct seq_file *s, void *v)
 static int __init look_around_init(void)
 {
 	int ret = 0;
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_OSVELTE)
+	struct config_ezreclaimd *config_ezr;
+
+	config_ezr = oplus_read_mm_config(module_name_ezreclaimd);
+	if (config_ezr && config_ezr->enable) {
+		pr_info("%s is disabled by EZR\n", __func__);
+		return 0;
+	}
+#endif /* CONFIG_OPLUS_FEATURE_MM_OSVELTE */
 
 	ret = register_look_around_vendor_hooks();
 	if (ret != 0)
@@ -235,4 +247,3 @@ module_init(look_around_init);
 module_exit(look_around_exit);
 
 MODULE_LICENSE("GPL v2");
-

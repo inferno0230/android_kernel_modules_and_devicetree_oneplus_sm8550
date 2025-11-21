@@ -14,7 +14,9 @@ OPLUS_KALAMA_BOARDS += \
 		aston-23801-kalama-overlay-T0.dtbo \
 		aston-23861-kalama-overlay-T0.dtbo \
 		aston-23801-kalama-overlay-EVB.dtbo \
+		benz-23061-crow-overlay-DVT1.dtbo \
 		benz-23871-crow-overlay-DVT1.dtbo \
+		benz-23061-crow-overlay.dtbo \
 		benz-23871-crow-overlay.dtbo
 kalama-overlays-dtb-y += $(OPLUS_KALAMA_BOARDS) $(KALAMA_BASE_DTB) $(KALAMA_APQ_BASE_DTB)
 dtb-y += $(OPLUS_KALAMA_BOARDS) $(KALAMA_BASE_DTB) $(KALAMA_APQ_BASE_DTB)

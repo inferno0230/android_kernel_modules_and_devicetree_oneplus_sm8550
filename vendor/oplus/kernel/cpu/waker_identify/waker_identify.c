@@ -407,7 +407,7 @@ out:
 		index = result_index[i];
 		wake_array_index = i - 1 - wake_source_index * MAX_BREADTH;
 		wake_source_index = result_index[(i - 1) / MAX_BREADTH];
-		if ((index > 0) && (get_task_name(thread[index].pid, thread[index].task, task_name))) {
+		if ((index >= 0) && (get_task_name(thread[index].pid, thread[index].task, task_name))) {
 			len += snprintf(page + len, RESULT_PAGE_SIZE - len, "%d;%d;%s;%u;%d;%d;%d;%d\n",
 				thread[index].tgid, thread[index].pid, task_name, thread[wake_source_index].waker_array[wake_array_index].wake_count,
 					task_util(thread[index].task), thread[wake_source_index].pid, task_nice(thread[index].task)+120, thread[wake_source_index].total_count);

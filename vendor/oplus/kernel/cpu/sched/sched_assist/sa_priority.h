@@ -33,6 +33,8 @@ void update_ux_timeline_task_tick(struct oplus_rq *orq, struct oplus_task_struct
 void update_ux_timeline_task_removal(struct oplus_rq *orq, struct oplus_task_struct *ots);
 bool need_resched_ux(struct oplus_rq *orq, struct oplus_task_struct *curr, unsigned long delta_exec);
 bool need_wakeup_preempt(struct oplus_rq *orq, struct oplus_task_struct *curr);
+void save_task_vruntime_delta(struct task_struct *task, struct oplus_task_struct *ots);
+void make_up_task_vruntime(struct task_struct *task, struct oplus_task_struct *ots);
 
 void android_vh_sched_stat_runtime_handler(void *unused, struct task_struct *tsk, u64 runtime, u64 vruntime);
 #endif /* _OPLUS_SA_PRIORITY_H_ */

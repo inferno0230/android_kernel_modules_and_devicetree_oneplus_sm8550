@@ -10,9 +10,9 @@
 #include "sa_common.h"
 #include "sa_pipeline.h"
 
-#define MAX_PIPELINE_TASK_NUM 5
-static int pipeline_pids[MAX_PIPELINE_TASK_NUM] = {-1, -1, -1, -1, -1};
-static int pipeline_cpus[MAX_PIPELINE_TASK_NUM] = {-1, -1, -1, -1, -1};
+#define MAX_PIPELINE_TASK_NUM 6
+static int pipeline_pids[MAX_PIPELINE_TASK_NUM] = {-1, -1, -1, -1, -1, -1};
+static int pipeline_cpus[MAX_PIPELINE_TASK_NUM] = {-1, -1, -1, -1, -1, -1};
 static struct task_struct *pipeline_task[MAX_PIPELINE_TASK_NUM] = {NULL};
 static struct oplus_task_struct *pipeline_ots[MAX_PIPELINE_TASK_NUM] = {NULL};
 static struct task_struct *prime_task = NULL;
@@ -21,18 +21,33 @@ static unsigned int pipeline_task_nr = 0;
 static DEFINE_RAW_SPINLOCK(pipeline_lock);
 
 #if IS_ENABLED(CONFIG_SCHED_WALT)
+#define PIPELINE_MIGRATE_PRIMR_UTIL_MIN 512
+#define PIPELINE_MIGRATE_PRIME_UTIL_DIFF 256
+
+#define SWAP_DIFF_DEFAULT_PERCENT 70
+#define COLOC_DEMAND_DEFAULT_CNT 10;
+#define MAX_NEW_WALT_WINDOWN_CNT 3000
 static bool pipeline_prime_rearrange = false;
-#define PIPELINE_SWAP_UTIL_DIFF 50
+static bool new_pipeline_task_set = true;
+static int swap_diff_percent = SWAP_DIFF_DEFAULT_PERCENT;
+static int coloc_demand_cnt = COLOC_DEMAND_DEFAULT_CNT;
+static int walt_windown_cnt = 0;
+static unsigned int pipeline_prev_coloc_demand[MAX_PIPELINE_TASK_NUM] = {0, 0, 0, 0, 0, 0};
+static unsigned int pipeline_task_sum_util[MAX_PIPELINE_TASK_NUM] = {0, 0, 0, 0, 0, 0};
 #endif
 
 #define PIPELINE_TASK_UX_STATE (UX_PRIORITY_PIPELINE | SA_TYPE_HEAVY)
+#define PIPELINE_UI_TASK_UX_STATE (UX_PRIORITY_PIPELINE_UI | SA_TYPE_LIGHT)
+#define PIPELINE_TOP_TASK_UX_STATE (UX_PRIORITY_TOP_APP | SA_TYPE_LIGHT)
 
 static DEFINE_MUTEX(p_mutex);
 
 static inline bool is_valid_pipeline_task(int pipeline_cpu, int ux_state)
 {
 	return (pipeline_cpu > 0) && (pipeline_cpu <= nr_cpu_ids) &&
-		((ux_state & PIPELINE_TASK_UX_STATE) == PIPELINE_TASK_UX_STATE);
+		(((ux_state & PIPELINE_TASK_UX_STATE) == PIPELINE_TASK_UX_STATE) ||
+		((ux_state & PIPELINE_UI_TASK_UX_STATE) == PIPELINE_UI_TASK_UX_STATE) ||
+		((ux_state & PIPELINE_TOP_TASK_UX_STATE) == PIPELINE_TOP_TASK_UX_STATE));
 }
 
 bool oplus_is_pipeline_task(struct task_struct *task)
@@ -113,36 +128,117 @@ static void systrace_c_printk(const char *msg, unsigned long val)
 	tracing_mark_write(buf);
 }
 
-#if IS_ENABLED(CONFIG_SCHED_WALT)
-static inline unsigned int pipeline_task_avg_util(struct task_struct *p, unsigned int divisor)
+static void systrace_pids_cpus_printk(void)
 {
-	unsigned int avg_util;
+	if (unlikely(global_debug_enabled & DEBUG_PIPELINE)) {
+		char buf[256];
 
+		snprintf(buf, sizeof(buf), "B|99999|%d:%d, %d:%d, %d:%d, %d:%d, %d:%d\n",
+			pipeline_pids[0], pipeline_cpus[0], pipeline_pids[1], pipeline_cpus[1],
+			pipeline_pids[2], pipeline_cpus[2], pipeline_pids[3], pipeline_cpus[3],
+			pipeline_pids[4], pipeline_cpus[4]);
+		tracing_mark_write(buf);
+		snprintf(buf, sizeof(buf), "E|99999\n");
+		tracing_mark_write(buf);
+
+		systrace_c_printk("pids_cpus_write", 1);
+		systrace_c_printk("pids_cpus_write", 0);
+	}
+}
+
+#if IS_ENABLED(CONFIG_SCHED_WALT)
+static inline unsigned int pipeline_task_avg_util_trace(struct task_struct *p, unsigned int divisor)
+{
 	struct walt_task_struct *wts = (struct walt_task_struct *) p->android_vendor_data1;
 	unsigned int coloc_demand = wts->coloc_demand;
 
 	if (divisor > 0)
 		do_div(coloc_demand, divisor);
 
-	avg_util = coloc_demand;
+	if (unlikely(global_debug_enabled & DEBUG_PIPELINE)) {
+		char buf[64];
+
+		snprintf(buf, sizeof(buf), "%s_%d_avg_util\n", p->comm, p->pid);
+		systrace_c_printk(buf, coloc_demand);
+	}
+
+	return coloc_demand;
+}
+
+static inline void pipeline_task_sum_util_trace(struct task_struct *p, unsigned int divisor, int i)
+{
+	struct walt_task_struct *wts = (struct walt_task_struct *) p->android_vendor_data1;
+	unsigned int coloc_demand = wts->coloc_demand;
+
+	lockdep_assert_held(&pipeline_lock);
+
+	/*
+	 * task had no activity in previous RAVG_HIST_SIZE windows
+	 */
+	if (pipeline_prev_coloc_demand[i] == coloc_demand)
+		coloc_demand = 0;
+	else
+		pipeline_prev_coloc_demand[i] = coloc_demand;
+
+	if ((divisor > 0) && (coloc_demand > 0))
+		do_div(coloc_demand, divisor);
+
+	pipeline_task_sum_util[i] += coloc_demand;
 
 	if (unlikely(global_debug_enabled & DEBUG_PIPELINE)) {
 		char buf[64];
 
-		snprintf(buf, sizeof(buf), "%s_avg_util\n", p->comm);
-		systrace_c_printk(buf, avg_util);
-		snprintf(buf, sizeof(buf), "%s_util\n", p->comm);
-		systrace_c_printk(buf, wts->demand_scaled);
+		snprintf(buf, sizeof(buf), "%s_%d_avg_util\n", p->comm, p->pid);
+		systrace_c_printk(buf, coloc_demand);
+		snprintf(buf, sizeof(buf), "%s_%d_sum_util\n", p->comm, p->pid);
+		systrace_c_printk(buf, pipeline_task_sum_util[i]);
 	}
-
-	return avg_util;
 }
 
-static inline unsigned int pipeline_task_util(struct task_struct *p)
+static inline unsigned int pipeline_task_util_trace(struct task_struct *p)
 {
 	struct walt_task_struct *wts = (struct walt_task_struct *) p->android_vendor_data1;
+	unsigned int util = wts->demand_scaled;
 
-	return wts->demand_scaled;
+	if (unlikely(global_debug_enabled & DEBUG_PIPELINE)) {
+		char buf[64];
+
+		snprintf(buf, sizeof(buf), "%s_%d_util\n", p->comm, p->pid);
+		systrace_c_printk(buf, util);
+	}
+
+	return util;
+}
+
+static inline bool task_can_run_on_prime_cpu(struct task_struct *task)
+{
+	unsigned int task_util = 0;
+	unsigned int prime_util = 0;
+	bool can = false;
+	unsigned long flags;
+
+	task_util = pipeline_task_util_trace(task);
+	if (task_util < PIPELINE_MIGRATE_PRIMR_UTIL_MIN)
+		return false;
+
+	if (raw_spin_trylock_irqsave(&pipeline_lock, flags)) {
+		if ((pipeline_task_nr <= 1) || (prime_task == NULL))
+			goto unlock;
+
+		if (prime_task->nr_cpus_allowed < 2)
+			goto unlock;
+
+		prime_util = pipeline_task_util_trace(prime_task);
+
+		if ((task_util > prime_util) &&
+			(task_util - prime_util >= PIPELINE_MIGRATE_PRIME_UTIL_DIFF))
+			can = true;
+
+unlock:
+		raw_spin_unlock_irqrestore(&pipeline_lock, flags);
+	}
+
+	return can;
 }
 
 void qcom_rearrange_pipeline_preferred_cpus(unsigned int divisor)
@@ -155,8 +251,9 @@ void qcom_rearrange_pipeline_preferred_cpus(unsigned int divisor)
 	unsigned int task_util = 0;
 	unsigned int max_util = 0;
 	unsigned int prime_util = 0;
-	bool avg_prime_swap = false;
-	bool prime_swap = false;
+	unsigned int diff_util = 0;
+	int diff_percent = 0;
+	int max_walt_windown_cnt;
 	unsigned long flags;
 
 	if (unlikely(!global_sched_assist_enabled))
@@ -169,12 +266,23 @@ void qcom_rearrange_pipeline_preferred_cpus(unsigned int divisor)
 		return;
 
 	if (raw_spin_trylock_irqsave(&pipeline_lock, flags)) {
+		if (!pipeline_prime_rearrange)
+			goto unlock;
+
 		if ((pipeline_task_nr <= 1) || (prime_task == NULL))
 			goto unlock;
 
 		if (prime_task->nr_cpus_allowed < 2)
 			goto unlock;
 
+		walt_windown_cnt++;
+		if (!new_pipeline_task_set) {
+			if (walt_windown_cnt % RAVG_HIST_SIZE)
+				goto unlock;
+
+			max_walt_windown_cnt = coloc_demand_cnt * RAVG_HIST_SIZE;
+		}
+
 		for (i = 0; i < MAX_PIPELINE_TASK_NUM; i++) {
 			if (pipeline_task[i]) {
 				task = pipeline_task[i];
@@ -184,70 +292,80 @@ void qcom_rearrange_pipeline_preferred_cpus(unsigned int divisor)
 				if (atomic_read(&ots->pipeline_cpu) == nr_cpu_ids)
 					continue;
 
-				task_util = pipeline_task_avg_util(task, divisor);
+				if (new_pipeline_task_set) {
+					task_util = pipeline_task_avg_util_trace(task, divisor);
 
-				if (max_util_task == NULL || max_util < task_util) {
-					max_util_task = task;
-					max_util_ots = ots;
-					max_util = task_util;
+					if (max_util_task == NULL || max_util < task_util) {
+						max_util_task = task;
+						max_util_ots = ots;
+						max_util = task_util;
+					}
+
+					if (task == prime_task)
+						prime_util = task_util;
+				} else {
+					pipeline_task_sum_util_trace(task, divisor, i);
+
+					if (walt_windown_cnt >= max_walt_windown_cnt) {
+						task_util = pipeline_task_sum_util[i];
+
+						if (max_util_task == NULL || max_util < task_util) {
+							max_util_task = task;
+							max_util_ots = ots;
+							max_util = task_util;
+						}
+
+						if (task == prime_task)
+							prime_util = task_util;
+					}
 				}
+			}
+		}
 
-				if (task == prime_task)
-					prime_util = task_util;
+		if (new_pipeline_task_set) {
+			if (walt_windown_cnt >= MAX_NEW_WALT_WINDOWN_CNT) {
+				new_pipeline_task_set = false;
+				walt_windown_cnt = 0;
+			}
+		} else {
+			if (walt_windown_cnt >= max_walt_windown_cnt) {
+				walt_windown_cnt = 0;
+				for (i = 0; i < MAX_PIPELINE_TASK_NUM; i++) {
+					pipeline_task_sum_util[i] = 0;
+				}
+			} else {
+				goto unlock;
 			}
 		}
 
 		if ((max_util_task != NULL) &&
 				(max_util_task != prime_task) &&
-				(max_util - prime_util > PIPELINE_SWAP_UTIL_DIFF)) {
-			avg_prime_swap = true;
-			goto swap;
-		}
+				(max_util > prime_util)) {
+			if (prime_util == 0) {
+				diff_percent = 100;
+			} else {
+				diff_util = max_util - prime_util;
+				if (diff_util >= prime_util)
+					diff_percent = 100;
+				else
+					diff_percent = (diff_util * 100) / prime_util;
+			}
 
-		max_util_task = NULL;
-		max_util_ots = NULL;
-		max_util = 0;
-		prime_util = 0;
-		for (i = 0; i < MAX_PIPELINE_TASK_NUM; i++) {
-			if (pipeline_task[i]) {
-				task = pipeline_task[i];
-				if (!cpumask_test_cpu(nr_cpu_ids - 1, task->cpus_ptr))
-					continue;
-				ots = pipeline_ots[i];
-				if (atomic_read(&ots->pipeline_cpu) == nr_cpu_ids)
-					continue;
+			if (diff_percent >= swap_diff_percent) {
+				atomic_set(&prime_ots->pipeline_cpu, atomic_read(&max_util_ots->pipeline_cpu));
+				atomic_set(&max_util_ots->pipeline_cpu, nr_cpu_ids - 1);
+				prime_task = max_util_task;
+				prime_ots = max_util_ots;
 
-				task_util = pipeline_task_util(task);
-
-				if (max_util_task == NULL || max_util < task_util) {
-					max_util_task = task;
-					max_util_ots = ots;
-					max_util = task_util;
+				if (unlikely(global_debug_enabled & DEBUG_PIPELINE)) {
+					systrace_c_printk("swap_prime_task", 1);
+					systrace_c_printk("swap_prime_task", 0);
 				}
-
-				if (task == prime_task)
-					prime_util = task_util;
 			}
 		}
 
-		if ((max_util_task != NULL) &&
-				(max_util_task != prime_task) &&
-				(max_util - prime_util > (PIPELINE_SWAP_UTIL_DIFF << 1))) {
-			prime_swap = true;
-		}
-
-swap:
-		if (avg_prime_swap || prime_swap) {
-			atomic_set(&prime_ots->pipeline_cpu, atomic_read(&max_util_ots->pipeline_cpu));
-			atomic_set(&max_util_ots->pipeline_cpu, nr_cpu_ids - 1);
-			prime_task = max_util_task;
-			prime_ots = max_util_ots;
-
-			if (unlikely(global_debug_enabled & DEBUG_PIPELINE)) {
-				systrace_c_printk("swap_prime_task", avg_prime_swap? 1 : 2);
-				systrace_c_printk("swap_prime_task", 0);
-			}
-		}
+		if (unlikely(global_debug_enabled & DEBUG_PIPELINE))
+			systrace_c_printk("diff_percent", diff_percent);
 
 unlock:
 		raw_spin_unlock_irqrestore(&pipeline_lock, flags);
@@ -390,14 +508,12 @@ bool oplus_pipeline_task_skip_ux_change(struct oplus_task_struct *ots, int *ux_s
 bool oplus_pipeline_task_skip_cpu(struct task_struct *task, unsigned int dst_cpu)
 {
 	struct task_struct *dst_task;
-	struct oplus_task_struct *ots;
-	int pipeline_cpu;
 	bool skip = true;
 
 	if (unlikely(!global_sched_assist_enabled))
 		return false;
 
-	if ((prime_ots == NULL) || (dst_cpu != nr_cpu_ids - 1))
+	if ((prime_task == NULL) || (dst_cpu != nr_cpu_ids - 1))
 		return false;
 
 	/* rt task */
@@ -407,27 +523,17 @@ bool oplus_pipeline_task_skip_cpu(struct task_struct *task, unsigned int dst_cpu
 	dst_task = cpu_rq(dst_cpu)->curr;
 	if (task == dst_task)
 		return false;
+	if (oplus_is_pipeline_task(dst_task))
+		return true;
 
-	ots = get_oplus_task_struct(task);
-	if (IS_ERR_OR_NULL(ots))
+	if (!oplus_is_pipeline_task(task))
 		return false;
 
-	pipeline_cpu = atomic_read(&ots->pipeline_cpu);
-	if (!is_valid_pipeline_task(pipeline_cpu, ots->ux_state))
+	if (task == prime_task)
 		return false;
 
 #if IS_ENABLED(CONFIG_SCHED_WALT)
-	if (pipeline_prime_rearrange) {
-		if ((pipeline_cpu == dst_cpu) && !oplus_is_pipeline_task(dst_task))
-			skip = false;
-	} else {
-		if (available_idle_cpu(dst_cpu) &&
-			(pipeline_task_util(task) - pipeline_task_util(dst_task) >
-			(PIPELINE_SWAP_UTIL_DIFF << 1)))
-			skip = false;
-	}
-#else
-	if ((pipeline_cpu == dst_cpu) && !oplus_is_pipeline_task(dst_task))
+	if (task_can_run_on_prime_cpu(task))
 		skip = false;
 #endif
 
@@ -486,12 +592,15 @@ static inline void pipeline_set_boost(bool boost)
 	}
 }
 
+#define UI_TASK_BASE 200
+#define TOP_TSAK_BASE 300
+
 static ssize_t pipeline_pids_proc_write(struct file *file,
 			const char __user *buf, size_t count, loff_t *ppos)
 {
 	char buffer[256] = {0};
-	int pids[MAX_PIPELINE_TASK_NUM] = {-1, -1, -1, -1, -1};
-	int cpus[MAX_PIPELINE_TASK_NUM] = {-1, -1, -1, -1, -1};
+	int pids[MAX_PIPELINE_TASK_NUM] = {-1, -1, -1, -1, -1, -1};
+	int cpus[MAX_PIPELINE_TASK_NUM] = {-1, -1, -1, -1, -1, -1};
 	int ret;
 	int i;
 	struct task_struct *task;
@@ -502,15 +611,17 @@ static ssize_t pipeline_pids_proc_write(struct file *file,
 	if (ret <= 0)
 		return ret;
 
-	ret = sscanf(buffer, "%d %d %d %d %d %d %d %d %d %d", &pids[0], &cpus[0],
-			&pids[1], &cpus[1], &pids[2], &cpus[2],
-			&pids[3], &cpus[3], &pids[4], &cpus[4]);
+	ret = sscanf(buffer, "%d %d %d %d %d %d %d %d %d %d %d %d",
+			&pids[0], &cpus[0], &pids[1], &cpus[1], &pids[2], &cpus[2],
+			&pids[3], &cpus[3], &pids[4], &cpus[4], &pids[5], &cpus[5]);
 
 	if (ret < 0)
 		return -EINVAL;
 
 	for (i = 0; i < MAX_PIPELINE_TASK_NUM; i++) {
-		if (!((cpus[i] == -1) || ((cpus[i] > 0) && (cpus[i] < nr_cpu_ids))))
+		if (!(((cpus[i] == -1) || ((cpus[i] > 0) && (cpus[i] < nr_cpu_ids))) ||
+			((cpus[i] == -2) || ((cpus[i] > UI_TASK_BASE) && (cpus[i] < UI_TASK_BASE + nr_cpu_ids))) ||
+			((cpus[i] == -3) || ((cpus[i] > TOP_TSAK_BASE) && (cpus[i] < TOP_TSAK_BASE + nr_cpu_ids)))))
 			return -EINVAL;
 	}
 
@@ -523,7 +634,7 @@ static ssize_t pipeline_pids_proc_write(struct file *file,
 				task = pipeline_task[i];
 				ots = pipeline_ots[i];
 				atomic_set(&ots->pipeline_cpu, -1);
-				oplus_set_ux_state_lock(task, 0, true);
+				oplus_set_ux_state_lock(task, 0, -1, true);
 
 				/* get_pid_task have called get_task_struct, now call put_task_struct */
 				put_task_struct(task);
@@ -538,6 +649,17 @@ static ssize_t pipeline_pids_proc_write(struct file *file,
 		prime_task = NULL;
 		prime_ots = NULL;
 		pipeline_task_nr = 0;
+
+#if IS_ENABLED(CONFIG_SCHED_WALT)
+		for (i = 0; i < MAX_PIPELINE_TASK_NUM; i++) {
+			pipeline_prev_coloc_demand[i] = 0;
+			pipeline_task_sum_util[i] = 0;
+		}
+		new_pipeline_task_set = true;
+		walt_windown_cnt = 0;
+#endif
+
+		systrace_pids_cpus_printk();
 	}
 	raw_spin_unlock_irqrestore(&pipeline_lock, flags);
 
@@ -557,15 +679,27 @@ static ssize_t pipeline_pids_proc_write(struct file *file,
 			if (task) {
 				ots = get_oplus_task_struct(task);
 				if (!IS_ERR_OR_NULL(ots)) {
-					oplus_set_ux_state_lock(task, PIPELINE_TASK_UX_STATE, true);
-					if (cpus[i] != -1)
-						atomic_set(&ots->pipeline_cpu, cpus[i]);
-					else
-						atomic_set(&ots->pipeline_cpu, nr_cpu_ids);
 					pipeline_pids[i] = pids[i];
 					pipeline_cpus[i] = cpus[i];
 					pipeline_task[i] = task;
 					pipeline_ots[i] = ots;
+
+					if ((cpus[i] == -3) || (cpus[i] > TOP_TSAK_BASE)) {
+						if (cpus[i] > TOP_TSAK_BASE)
+							cpus[i] -= TOP_TSAK_BASE;
+						oplus_set_ux_state_lock(task, PIPELINE_TOP_TASK_UX_STATE, -1, true);
+					} else if ((cpus[i] == -2) || (cpus[i] > UI_TASK_BASE)) {
+						if (cpus[i] > UI_TASK_BASE)
+							cpus[i] -= UI_TASK_BASE;
+						oplus_set_ux_state_lock(task, PIPELINE_UI_TASK_UX_STATE, -1, true);
+					} else { /* (cpus[i] == -1) || (cpus[i] > 0) */
+						oplus_set_ux_state_lock(task, PIPELINE_TASK_UX_STATE, -1, true);
+					}
+
+					if (cpus[i] > 0)
+						atomic_set(&ots->pipeline_cpu, cpus[i]);
+					else
+						atomic_set(&ots->pipeline_cpu, nr_cpu_ids);
 
 					/* assumes just one prime */
 					if (cpus[i] == nr_cpu_ids - 1) {
@@ -575,7 +709,7 @@ static ssize_t pipeline_pids_proc_write(struct file *file,
 
 					pipeline_task_nr++;
 
-					if (cpus[i] != -1)
+					if (cpus[i] > 0)
 						cpumask_set_cpu(cpus[i], &cpus_for_pipeline);
 				} else {
 					/* get_pid_task have called get_task_struct */
@@ -583,6 +717,10 @@ static ssize_t pipeline_pids_proc_write(struct file *file,
 				}
 			}
 		}
+
+		if (pipeline_task_nr > 0)
+			systrace_pids_cpus_printk();
+
 		raw_spin_unlock_irqrestore(&pipeline_lock, flags);
 
 		if (!cpumask_empty(&cpus_for_pipeline))
@@ -601,10 +739,11 @@ static ssize_t pipeline_pids_proc_read(struct file *file,
 	int len;
 
 	mutex_lock(&p_mutex);
-	len = snprintf(buffer, sizeof(buffer), "%d\t %d\t %d\t %d\t %d\t %d\t %d\t %d\t %d\t %d\n",
+	len = snprintf(buffer, sizeof(buffer),
+		"%d\t %d\t %d\t %d\t %d\t %d\t %d\t %d\t %d\t %d\t %d\t %d\n",
 		pipeline_pids[0], pipeline_cpus[0], pipeline_pids[1], pipeline_cpus[1],
 		pipeline_pids[2], pipeline_cpus[2], pipeline_pids[3], pipeline_cpus[3],
-		pipeline_pids[4], pipeline_cpus[4]);
+		pipeline_pids[4], pipeline_cpus[4], pipeline_pids[5], pipeline_cpus[5]);
 	mutex_unlock(&p_mutex);
 
 	return simple_read_from_buffer(buf, count, ppos, buffer, len);
@@ -620,20 +759,35 @@ static const struct proc_ops pipeline_pids_proc_ops = {
 static ssize_t pipeline_prime_proc_write(struct file *file,
 			const char __user *buf, size_t count, loff_t *ppos)
 {
-	char buffer[32] = {0};
+	char buffer[128] = {0};
 	int ret;
 	int rearrange;
+	int percent = -1;
+	int cnt = -1;
+	unsigned long flags;
 
 	ret = simple_write_to_buffer(buffer, sizeof(buffer) - 1, ppos, buf, count);
 	if (ret <= 0)
 		return ret;
 
-	ret = sscanf(buffer, "%d", &rearrange);
-	if (ret != 1)
+	ret = sscanf(buffer, "%d %d %d", &rearrange, &percent, &cnt);
+	if (ret < 1)
 		return -EINVAL;
 
 	mutex_lock(&p_mutex);
+	raw_spin_lock_irqsave(&pipeline_lock, flags);
 	pipeline_prime_rearrange = !!rearrange;
+
+	if (percent > 0 && percent <= 100)
+		swap_diff_percent = percent;
+	else
+		swap_diff_percent = SWAP_DIFF_DEFAULT_PERCENT;
+
+	if (cnt > 0 && cnt <= 20)
+		coloc_demand_cnt = cnt;
+	else
+		coloc_demand_cnt = COLOC_DEMAND_DEFAULT_CNT;
+	raw_spin_unlock_irqrestore(&pipeline_lock, flags);
 	mutex_unlock(&p_mutex);
 
 	return count;
@@ -642,11 +796,12 @@ static ssize_t pipeline_prime_proc_write(struct file *file,
 static ssize_t pipeline_prime_proc_read(struct file *file,
 			char __user *buf, size_t count, loff_t *ppos)
 {
-	char buffer[32] = {0};
+	char buffer[128] = {0};
 	int len;
 
 	mutex_lock(&p_mutex);
-	len = sprintf(buffer, "%d\n", pipeline_prime_rearrange? 1 : 0);
+	len = sprintf(buffer, "%d %d %d\n", pipeline_prime_rearrange? 1 : 0,
+		swap_diff_percent, coloc_demand_cnt);
 	mutex_unlock(&p_mutex);
 
 	return simple_read_from_buffer(buf, count, ppos, buffer, len);

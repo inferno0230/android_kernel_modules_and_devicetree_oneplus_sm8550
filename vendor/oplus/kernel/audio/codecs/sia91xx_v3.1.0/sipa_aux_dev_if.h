@@ -28,7 +28,7 @@ int soc_sipa81xx_init(
 	struct snd_soc_codec_conf *codec_conf,
 	u32 conf_num);
 
-int soc_aux_init_only_sipa81xx(
+extern int soc_aux_init_only_sipa81xx(
 	struct platform_device *pdev,
 	struct snd_soc_card *card);
 
@@ -36,12 +36,16 @@ int soc_aux_deinit_only_sipa81xx(
 	struct platform_device *pdev,
 	struct snd_soc_card *card);
 
-int soc_sia91xx_init(
+int soc_sia91xx_v3_init(
 	struct platform_device *pdev,
 	struct snd_soc_codec_conf *codec_conf,
 	u32 conf_num);
 
-int soc_codec_conf_sia91xx(
+int soc_codec_conf_sia91xx_v3(
+	struct platform_device *pdev,
+	struct snd_soc_card *card);
+
+extern int soc_codec_conf_sipa(
 	struct platform_device *pdev,
 	struct snd_soc_card *card);
 #endif /* _SIPA_AUX_DEV_IF_H */

@@ -28,6 +28,9 @@ static DEFINE_PER_CPU(struct freq_qos_request, qos_req_max);
 static cpumask_var_t limit_mask_min;
 static cpumask_var_t limit_mask_max;
 
+static struct hrtimer reinit_hrtimer;
+static struct work_struct reinit_work;
+
 /*
  * sameone[ORMS] can disable GPA cpufreq limit,
  * by writing 1 to /proc/game_opt/disable_cpufreq_limit.
@@ -455,6 +458,44 @@ static const struct proc_ops disable_cpufreq_limit_proc_ops = {
 	.proc_lseek		= default_llseek,
 };
 
+int __cpufreq_limits_init(void)
+{
+	int ret;
+
+	pr_info("%s: into\n", __func__);
+
+	ret = freq_qos_request_init();
+	if (ret) {
+		pr_err("%s: Failed to init qos requests policy for ret=%d\n",
+			__func__, ret);
+		return ret;
+	}
+
+	INIT_DELAYED_WORK(&freq_qos_req_reset_work, freq_qos_request_reset);
+
+	proc_create_data("cpu_min_freq", 0664, game_opt_dir, &cpu_min_freq_proc_ops, NULL);
+	proc_create_data("cpu_max_freq", 0664, game_opt_dir, &cpu_max_freq_proc_ops, NULL);
+	proc_create_data("disable_cpufreq_limit", 0664, game_opt_dir, &disable_cpufreq_limit_proc_ops, NULL);
+
+	return 0;
+}
+
+static void reinit_cpufreq_limits(struct work_struct *work)
+{
+	int ret;
+
+	ret = __cpufreq_limits_init();
+	if (ret) {
+		hrtimer_start(&reinit_hrtimer, ktime_set(1, 0), HRTIMER_MODE_REL);
+	}
+}
+
+static enum hrtimer_restart reinit_hrtimer_callback(struct hrtimer *timer)
+{
+	schedule_work(&reinit_work);
+	return HRTIMER_NORESTART;
+}
+
 int cpufreq_limits_init(void)
 {
 	int ret;
@@ -470,18 +511,14 @@ int cpufreq_limits_init(void)
 		return -ENOMEM;
 	}
 
-	ret = freq_qos_request_init();
+	ret = __cpufreq_limits_init();
 	if (ret) {
-		pr_err("%s: Failed to init qos requests policy for ret=%d\n",
-			__func__, ret);
-		return ret;
+		INIT_WORK(&reinit_work, reinit_cpufreq_limits);
+
+		hrtimer_init(&reinit_hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+		reinit_hrtimer.function = reinit_hrtimer_callback;
+		hrtimer_start(&reinit_hrtimer, ktime_set(1, 0), HRTIMER_MODE_REL);
 	}
-
-	INIT_DELAYED_WORK(&freq_qos_req_reset_work, freq_qos_request_reset);
-
-	proc_create_data("cpu_min_freq", 0664, game_opt_dir, &cpu_min_freq_proc_ops, NULL);
-	proc_create_data("cpu_max_freq", 0664, game_opt_dir, &cpu_max_freq_proc_ops, NULL);
-	proc_create_data("disable_cpufreq_limit", 0664, game_opt_dir, &disable_cpufreq_limit_proc_ops, NULL);
 
 	return 0;
 }

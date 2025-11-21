@@ -1,3 +1,4 @@
+../vendor/oplus/kernel/network/data_module
 ../vendor/oplus/kernel/network/oplus_dns_hook
 ../vendor/oplus/kernel/network/linkpower_module
 ../vendor/oplus/kernel/network/oplus_score
@@ -19,7 +20,6 @@
 ../vendor/oplus/kernel/secureguard/gki2.0/rootguard
 ../vendor/oplus/secure/common/bsp/drivers/oplus_secure_common
 ../vendor/oplus/kernel/cpu/thermal/horae_shell_temp
-../vendor/oplus/kernel/network/data_module
 ../vendor/oplus/kernel/wifi/oplus_wifi_wsa
 ../vendor/oplus/kernel/cpu/thermal/oplus_ipa_thermal
 ../vendor/oplus/sensor/kernel/sensorhub/pseudo-sensor

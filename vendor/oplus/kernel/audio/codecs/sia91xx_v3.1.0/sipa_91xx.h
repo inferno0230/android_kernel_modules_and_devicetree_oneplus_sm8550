@@ -64,6 +64,11 @@ struct sia91xx_irq_desc {
 	unsigned char *desc;
 };
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_FEEDBACK)
+/* 2024/06/28, Add for smartpa vbatlow err check. */
+int sia91xx_check_status_reg(sipa_dev_t *si_pa);
+#endif
+
 int sia91xx_startup(struct snd_pcm_substream *substream, struct snd_soc_dai *dai);
 int sia91xx_hw_params(struct snd_pcm_substream *substream,
 							struct snd_pcm_hw_params *params, struct snd_soc_dai *dai);
@@ -79,7 +84,11 @@ int sia91xx_append_i2c_address(
 	int num_widgets, struct snd_soc_dai_driver *dai_drv, int num_dai);
 int sia91xx_dsp_start(sipa_dev_t *si_pa, int stream);
 int sia91xx_soft_mute(sipa_dev_t *si_pa);
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0))
 int sipa_i2c_probe(struct i2c_client *i2c, const struct i2c_device_id *id);
+#else
+int sipa_i2c_probe(struct i2c_client *i2c);
+#endif
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0))
 int sipa_i2c_remove(struct i2c_client *i2c);
 #else

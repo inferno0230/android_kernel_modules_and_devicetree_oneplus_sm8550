@@ -3,6 +3,8 @@ __tracepoint_android_vh_rwsem_direct_rsteal
 __tracepoint_android_vh_rwsem_optimistic_rspin
 osq_lock
 osq_unlock
+__traceiter_android_vh_init_adjust_zone_wmark
+__tracepoint_android_vh_init_adjust_zone_wmark
 __tracepoint_android_vh_binder_buffer_release
 __tracepoint_android_vh_do_swap_page_spf
 __tracepoint_android_vh_binder_find_desc
@@ -24,6 +26,7 @@ qdisc_tree_reduce_backlog
 qdisc_watchdog_cancel
 qdisc_watchdog_init
 qdisc_watchdog_schedule_range_ns
+schedtune_task_boost
 tcf_block_get
 tcf_block_put
 tcf_classify

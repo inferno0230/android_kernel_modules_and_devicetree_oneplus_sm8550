@@ -27,6 +27,10 @@
 #include "sched_assist_locking.h"
 #endif
 
+#if IS_ENABLED(CONFIG_OPLUS_SCHED_GROUP_OPT)
+#include "sa_group.h"
+#endif
+
 #define HI_MASK		0xFF00000000000000UL
 #define HI_FLAG		0xAB00000000000000UL
 
@@ -51,7 +55,7 @@ static void set_ux_to_task(struct task_struct *new) {
 	if ((fn_addr & HI_MASK) != HI_FLAG)
 		return;
 
-	oplus_set_ux_state_lock(new, oplus_get_ux_state(current->group_leader), true);
+	oplus_set_ux_state_lock(new, oplus_get_ux_state(current->group_leader), -1, true);
 }
 
 static void android_rvh_wake_up_new_task_handler(void *unused, struct task_struct *new) {
@@ -97,6 +101,9 @@ static int register_scheduler_vendor_hooks(void)
 	REGISTER_TRACE_RVH(android_rvh_dequeue_task, android_rvh_dequeue_task_handler);
 #endif
 
+#if IS_ENABLED(CONFIG_OPLUS_SCHED_GROUP_OPT)
+	REGISTER_TRACE_RVH(android_rvh_cpu_cgroup_online, android_rvh_cpu_cgroup_online_handler);
+#endif
 	/* register vender hook in fs/exec.c */
 	REGISTER_TRACE_VH(task_rename, task_rename_handler);
 
@@ -178,6 +185,9 @@ static int __init oplus_sched_assist_init(void)
 
 	sched_assist_init_oplus_rq();
 	update_ux_sched_cputopo();
+#if IS_ENABLED(CONFIG_OPLUS_SCHED_GROUP_OPT)
+	oplus_sg_map_init();
+#endif
 
 	ret = register_scheduler_vendor_hooks();
 	if (ret != 0)

@@ -7,6 +7,7 @@
 #include <linux/tcp.h>
 #include <net/tcp.h>
 #include <linux/sysctl.h>
+#include <linux/version.h>
 
 extern int app_monitor_dl_ctl_msg_handle(struct nlattr *nla);
 extern int app_monitor_dl_report_msg_handle(struct nlattr *nla);
@@ -1127,8 +1128,13 @@ int app_monitor_dl_ctl_msg_handle(struct  nlattr *nla)
 	return 0;
 }
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0))
+static int proc_app_power_monitor_start(const struct ctl_table *ctl, int write,
+					void __user *buffer, size_t *lenp, loff_t *ppos)
+#else
 static int proc_app_power_monitor_start(struct ctl_table *ctl, int write,
 					void __user *buffer, size_t *lenp, loff_t *ppos)
+#endif
 {
 	int ret;
 	printk("[app_monitor]:proc_app_power_monitor_start\n");
@@ -1146,8 +1152,13 @@ static int proc_app_power_monitor_start(struct ctl_table *ctl, int write,
 	return ret;
 }
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0))
+static int proc_app_power_report_request(const struct ctl_table *ctl, int write,
+		void __user *buffer, size_t *lenp, loff_t *ppos)
+#else
 static int proc_app_power_report_request(struct ctl_table *ctl, int write,
 		void __user *buffer, size_t *lenp, loff_t *ppos)
+#endif
 {
 	int  ret;
 	printk("[app_monitor]:proc_app_power_report_request");
@@ -1162,8 +1173,13 @@ static int proc_app_power_report_request(struct ctl_table *ctl, int write,
 	return ret;
 }
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0))
+static int proc_app_set_beat_alarm_period(const struct ctl_table *ctl, int write,
+		void __user *buffer, size_t *lenp, loff_t *ppos)
+#else
 static int proc_app_set_beat_alarm_period(struct ctl_table *ctl, int write,
 		void __user *buffer, size_t *lenp, loff_t *ppos)
+#endif
 {
 	int  ret;
 	int  index;
@@ -1181,8 +1197,13 @@ static int proc_app_set_beat_alarm_period(struct ctl_table *ctl, int write,
 	return ret;
 }
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0))
+static int proc_app_set_push_alarm_period(const struct ctl_table *ctl, int write,
+        void __user *buffer, size_t *lenp, loff_t *ppos)
+#else
 static int proc_app_set_push_alarm_period(struct ctl_table *ctl, int write,
 		void __user *buffer, size_t *lenp, loff_t *ppos)
+#endif
 {
 	int  ret;
 	int  index;

@@ -7,9 +7,6 @@
 
 enum {
 	ZRAM_TYPE_BASEPAGE,
-#ifdef CONFIG_CONT_PTE_HUGEPAGE_64K_ZRAM
-	ZRAM_TYPE_CHP,
-#endif
 	ZRAM_TYPE_MAX,
 };
 
@@ -50,10 +47,6 @@ extern struct zram *zram_arr[ZRAM_TYPE_MAX];
 } while(0)
 
 extern bool chp_supported;
-#ifdef CONFIG_CONT_PTE_HUGEPAGE_64K_ZRAM
-extern struct huge_page_pool *chp_pool;
-#endif
-
 extern inline bool is_chp_zram(struct zram *zram);
 extern inline unsigned long zram_page_state(struct zram *zram, int type);
 #endif

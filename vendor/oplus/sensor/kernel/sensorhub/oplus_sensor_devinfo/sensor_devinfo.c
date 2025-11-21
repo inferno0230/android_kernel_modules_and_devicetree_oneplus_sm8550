@@ -102,6 +102,10 @@ static struct panel_node g_panel_node[PANEL_NUM] = {
 	},
 	/* add from here */
 	{
+		.id = TD4160,
+		.lcm_name = "td4160",
+	},
+	{
 		.id = TD4377,
 		.lcm_name = "td4377",
 	},

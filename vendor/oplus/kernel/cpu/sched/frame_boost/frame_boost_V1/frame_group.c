@@ -24,6 +24,8 @@
 #if IS_ENABLED(CONFIG_OPLUS_FEATURE_FAKE_CAP)
 #include "../eas_opt/fake_cap.h"
 #endif
+#define CREATE_TRACE_POINTS
+#include "frame_boost_trace.h"
 
 #define NONE_FRAME_TASK      (0)
 #define STATIC_FRAME_TASK    (1 << 0)
@@ -2366,18 +2368,15 @@ static bool task_is_rt(struct task_struct *task)
 
 bool set_frame_group_task_to_perfer_cpu(struct task_struct *p, int *target_cpu)
 {
+	int iter_cpu = 0;
 	struct oplus_task_struct *ots = get_oplus_task_struct(p);
-	struct frame_group *grp;
+	struct frame_group *grp = NULL;
 	struct oplus_sched_cluster *cluster = NULL;
 	cpumask_t search_cpus = CPU_MASK_NONE;
 	unsigned long spare_cap = 0, max_spare_cap = 0;
-	int iter_cpu;
 	int max_spare_cap_cpu = -1, backup_cpu = -1;
-	bool ret = false;
-	bool use_avail_cls = true;
-	int fb_num = 0;
-	int cpu_nums = 0;
 	bool walk_next_cls = false;
+	cpumask_t available_cpus = CPU_MASK_NONE;
 
 	if (IS_ERR_OR_NULL(ots))
 		return false;
@@ -2385,73 +2384,92 @@ bool set_frame_group_task_to_perfer_cpu(struct task_struct *p, int *target_cpu)
 	if (!__frame_boost_enabled())
 		return false;
 
-	if (fbg_cluster_boost(p, target_cpu))
-		return true;
+	/* The interface is currently offered for use in games. */
+	cluster = fbg_get_task_preferred_cluster(p);
+	if (cluster == NULL) {
+		/* Some threads created before moduler working, just init them here. */
+		if (ots->fbg_list.prev == 0 && ots->fbg_list.next == 0) {
+			ots->fbg_state = NONE_FRAME_TASK;
+			ots->fbg_depth = INVALID_FBG_DEPTH;
+			INIT_LIST_HEAD(&ots->fbg_list);
+		}
 
-	/* Some threads created before moduler working, just init them here. */
-	if (ots->fbg_list.prev == 0 && ots->fbg_list.next == 0) {
-		ots->fbg_state = NONE_FRAME_TASK;
-		ots->fbg_depth = INVALID_FBG_DEPTH;
-		INIT_LIST_HEAD(&ots->fbg_list);
+		if (!ots->fbg_state)
+			return false;
+
+		grp = task_get_frame_group(ots);
+		if (grp == NULL)
+			return false;
+
+
+		grp = task_get_frame_group(ots);
+		if ((grp != &default_frame_boost_group) && (grp != &inputmethod_frame_boost_group))
+			return false;
+
+		if (!group_task_fits_cluster_cpus(p, grp->preferred_cluster))
+			return false;
+
+		cluster = grp->preferred_cluster;
 	}
 
-	if (!ots->fbg_state)
-		return false;
-
-	grp = task_get_frame_group(ots);
-	if ((grp != &default_frame_boost_group) && (grp != &inputmethod_frame_boost_group))
-		return false;
-
-	cluster = grp->preferred_cluster;
-	if (!group_task_fits_cluster_cpus(p, cluster))
-		return false;
-
-	/* Note that *target_cpu maybe invalid */
-	if ((*target_cpu > 0) && (*target_cpu < num_possible_cpus())
-		&& cpumask_test_cpu(*target_cpu, &cluster->cpus))
-		return false;
-
 retry:
-	cpumask_and(&search_cpus, p->cpus_ptr, cpu_online_mask);
+	cpumask_and(&search_cpus, p->cpus_ptr, cpu_active_mask);
 #ifdef CONFIG_OPLUS_ADD_CORE_CTRL_MASK
 	if (fbg_cpu_halt_mask)
 		cpumask_andnot(&search_cpus, &search_cpus, fbg_cpu_halt_mask);
 #endif /* CONFIG_OPLUS_ADD_CORE_CTRL_MASK */
 	cpumask_and(&search_cpus, &search_cpus, &cluster->cpus);
-	cpu_nums = cpumask_weight(&search_cpus);
+	/* In case preferred_cluster->cpus are inactive, give it a try to walk_next_cls */
+	if ((grp != NULL) && (cluster == grp->preferred_cluster))
+		walk_next_cls = true;
 
 	for_each_cpu(iter_cpu, &search_cpus) {
 		struct rq *rq = NULL;
 		struct task_struct *curr = NULL;
+		struct oplus_rq *orq = NULL;
 
 		rq = cpu_rq(iter_cpu);
 		curr = rq->curr;
+		orq = (struct oplus_rq *)rq->android_oem_data1;
 		if (curr) {
 			struct oplus_task_struct *ots_curr = get_oplus_task_struct(curr);
 
 			/* Avoid puting group task on the same cpu */
 			if (!IS_ERR_OR_NULL(ots_curr) && ots_curr->fbg_state) {
-				if ((backup_cpu == -1) && task_is_rt(curr))
+				if ((backup_cpu == -1) && task_is_rt(curr)) {
 					backup_cpu = iter_cpu;
-
-				fb_num++;
-
-				if (fb_num == cpu_nums)
-					walk_next_cls = true;
-
+					walk_next_cls = false;
+				}
 				continue;
 			}
-		}
+			/* If an ux amd rt thread running on this CPU, drop it! */
+			if (oplus_get_ux_state(rq->curr) & SCHED_ASSIST_UX_MASK)
+				continue;
 
+			if (rq->curr->prio < MAX_RT_PRIO)
+				continue;
+
+			/* If there are ux and rt threads in runnable state on this CPU, drop it! */
+			if (orq_has_ux_tasks(orq))
+				continue;
+
+			if (rt_rq_is_runnable(&rq->rt))
+				continue;
+		}
 
 		backup_cpu = iter_cpu;
 		walk_next_cls = false;
 
 		if (available_idle_cpu(iter_cpu)
 			|| (iter_cpu == task_cpu(p) && p->__state == TASK_RUNNING)) {
+			if (grp != NULL && grp->available_cluster)
+				available_cpus = grp->available_cluster->cpus;
+
+			trace_find_frame_boost_cpu(p, &search_cpus,
+				&cluster->cpus, &available_cpus,
+				"idle_backup", *target_cpu, iter_cpu);
 			*target_cpu = iter_cpu;
-			ret = true;
-			goto out;
+			return true;
 		}
 		spare_cap = max_t(long, capacity_of(iter_cpu) - cpu_util_without(iter_cpu, p), 0);
 		if (spare_cap > max_spare_cap) {
@@ -2461,24 +2479,35 @@ retry:
 	}
 
 	if (max_spare_cap_cpu != -1) {
+		if (grp != NULL && grp->available_cluster)
+			available_cpus = grp->available_cluster->cpus;
+
+		trace_find_frame_boost_cpu(p, &search_cpus,
+			&cluster->cpus, &available_cpus,
+			"max_spare", *target_cpu,
+			max_spare_cap_cpu);
 		*target_cpu = max_spare_cap_cpu;
-		ret = true;
+		return true;
 	} else if (!walk_next_cls && backup_cpu != -1) {
+		if (grp != NULL && grp->available_cluster)
+			available_cpus = grp->available_cluster->cpus;
+
+		trace_find_frame_boost_cpu(p, &search_cpus,
+			&cluster->cpus, &available_cpus,
+			"backup_cpu", *target_cpu,
+			backup_cpu);
 		*target_cpu = backup_cpu;
-		ret = true;
+		return true;
 	}
 
-	if (!ret && walk_next_cls && grp->available_cluster && use_avail_cls) {
+	if (walk_next_cls && grp != NULL && grp->available_cluster) {
 		cluster = grp->available_cluster;
 		cpumask_clear(&search_cpus);
-		use_avail_cls = false;
 		walk_next_cls = false;
-		fb_num = 0;
 		goto retry;
 	}
 
-out:
-	return ret;
+	return false;
 }
 EXPORT_SYMBOL_GPL(set_frame_group_task_to_perfer_cpu);
 

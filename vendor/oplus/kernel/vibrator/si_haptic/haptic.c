@@ -3736,10 +3736,10 @@ static const char* get_rtp_name(uint32_t id, uint32_t f0) {
 		hp_err("%s: f0 is %d, not found suffix.\n", __func__, f0);
 		return NULL;
 	}
-    if (id >= 0 && id < NUM_WAVEFORMS)
-        wave_name = rtp_wave_map[id];
-    else
-        hp_err("%s: id is %d, out of range.\n", __func__, id);
+	if (id > 0 && id < NUM_WAVEFORMS)
+		wave_name = rtp_wave_map[id];
+	else
+		hp_err("%s: id is %d, out of range.\n", __func__, id);
 	if (!wave_name) {
 		hp_err("%s: id is %d, not found wave name.\n", __func__, id);
 		return NULL;

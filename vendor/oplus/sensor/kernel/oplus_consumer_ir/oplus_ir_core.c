@@ -11,7 +11,12 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/regulator/consumer.h>
+#include <linux/of_gpio.h>
+#include <linux/gpio.h>
 #include "oplus_ir_core.h"
+#if defined (CONFIG_OPLUS_SENSOR_IR_USE_WL2866D)
+#include "wl2866d.h"
+#endif
 
 #define IR_BYTE_POS_INDEX                0
 #define IR_BIT_POS_INDEX                 1
@@ -21,6 +26,7 @@
 #define IR_DEFAULT_VDD_TYPE              0
 #define IR_EXTERNAL_VDD_TYPE             1
 #define IR_NO_VDD_TYPE                   2
+#define IR_GPIO_VDD_TYPE                 3
 #define IR_PARAM_MAX_SIZE                256*1024
 #define MIN_FREQUENCY 20000
 #define MAX_FREQUENCY 60000
@@ -41,11 +47,22 @@ extern int wl2868c_voltage_output(unsigned int ldo_num, int vol);
 extern int wl2868c_ldo_set_disable(unsigned int ldo_num);
 #endif
 
+#if defined (CONFIG_OPLUS_SENSOR_IR_USE_WL2866D)
+extern int wl2866d_set_ldo_enable(enum WL2866D_SELECT ldonum, uint32_t voltage);
+extern int wl2866d_set_ldo_disable(enum WL2866D_SELECT ldonum);
+typedef int (*wl2866d_set_ldo_enable_ptr)(enum WL2866D_SELECT ldonum, uint32_t voltage);
+typedef int (*wl2866d_set_ldo_disable_ptr)(enum WL2866D_SELECT ldonum);
+
+static wl2866d_set_ldo_enable_ptr wl2866d_set_ldo_enable_t = NULL;
+static wl2866d_set_ldo_disable_ptr wl2866d_set_ldo_disable_t = NULL;
+#endif
+
 struct hw_core_config_t {
 	int vdd_type;
 	int vdd_min_vol;
 	int vdd_max_vol;
 	struct regulator *vdd_3v0;
+	int use_ldo_gpio;
 };
 
 struct ir_core {
@@ -85,6 +102,7 @@ static int parse_hw_core_config(struct device *dev, struct ir_core* ir_core)
 {
 	int retval = 0;
 	u32 value = 0;
+	int ret = 0;
 	struct device_node *np = dev->of_node;
 
 	if (!ir_core) {
@@ -115,6 +133,21 @@ static int parse_hw_core_config(struct device *dev, struct ir_core* ir_core)
 		if (ir_core->core_config.vdd_type != IR_DEFAULT_VDD_TYPE) {
 			ir_core->core_config.vdd_3v0 = NULL;
 			pr_info("oplus_ir_core: %s: ir_core->core_config.vdd_3v0 is NULL\n", __func__);
+			if(ir_core->core_config.vdd_type == IR_GPIO_VDD_TYPE) {
+				retval = of_get_named_gpio(np, "ir-ldo-ctrl", 0);
+				if (retval < 0) {
+					pr_err("not use_extern_ldo\n");
+				} else {
+					ir_core->core_config.use_ldo_gpio = retval;
+					pr_err("use_extern_ldo = %d\n", ir_core->core_config.use_ldo_gpio);
+					if (gpio_is_valid(ir_core->core_config.use_ldo_gpio)) {
+						ret = gpio_request(ir_core->core_config.use_ldo_gpio, "ir-ldo-ctrl");
+						if (ret < 0) {
+							pr_err("failed to request ldo-gpio\n");
+						}
+					}
+				}
+			}
 		} else {
 			ir_core->core_config.vdd_3v0 = regulator_get(dev, "vdd");
 			if (!IS_ERR_OR_NULL(ir_core->core_config.vdd_3v0)) {
@@ -136,9 +169,20 @@ static int parse_hw_core_config(struct device *dev, struct ir_core* ir_core)
 	return 0;
 }
 
-static void enable_ir_vdd(struct ir_core *ir_core)
+static void __nocfi enable_ir_vdd(struct ir_core *ir_core)
 {
 	int retval = 0;
+	int ret = 0;
+	if(ir_core->core_config.vdd_type == IR_GPIO_VDD_TYPE) {
+		pr_err("oplus_ir_core: enable ir vdd\n");
+		if (ir_core->core_config.use_ldo_gpio > 0) {
+			pr_err("oplus_ir_core: set gpio value %d\n", ir_core->core_config.use_ldo_gpio);
+			ret = gpio_direction_output(ir_core->core_config.use_ldo_gpio, 1);
+			if (ret) {
+				pr_err("oplus_ir_core: set gpio value fail %d\n", ret);
+			}
+		}
+	}
 
 	if (ir_core->core_config.vdd_3v0 != NULL) {
 		regulator_set_voltage(ir_core->core_config.vdd_3v0,
@@ -157,20 +201,47 @@ static void enable_ir_vdd(struct ir_core *ir_core)
 		pr_info("oplus_ir_core:wl2868c error status!\n");
 	}
 #endif
+
+#if defined (CONFIG_OPLUS_SENSOR_IR_USE_WL2866D)
+	if (ir_core->core_config.vdd_type == IR_EXTERNAL_VDD_TYPE && wl2866d_set_ldo_enable_t != NULL) {
+		wl2866d_set_ldo_enable_t(FRONT_AVDD2, (uint32_t)(ir_core->core_config.vdd_max_vol));
+		pr_info("oplus_ir_core:wl2866d config value %d \n", ir_core->core_config.vdd_max_vol);
+	} else {
+		pr_info("oplus_ir_core:wl2866d error status!\n");
+	}
+#endif
 }
 
-static void disable_ir_vdd(struct ir_core *ir_core)
+static void __nocfi disable_ir_vdd(struct ir_core *ir_core)
 {
+	int ret = 0;
 	if (ir_core->core_config.vdd_3v0 != NULL) {
 		regulator_disable(ir_core->core_config.vdd_3v0);
 	}
-
+	if(ir_core->core_config.vdd_type == IR_GPIO_VDD_TYPE) {
+		if (ir_core->core_config.use_ldo_gpio > 0) {
+			pr_err("oplus_ir_core: disable gpio value %d\n", ir_core->core_config.use_ldo_gpio);
+			ret = gpio_direction_output(ir_core->core_config.use_ldo_gpio, 0);
+			if (ret) {
+				pr_err("oplus_ir_core: disable gpio failed.\n");
+			}
+		}
+	}
 #if defined (OPLUS_FEATURE_CAMERA_COMMON) && defined (CONFIG_OPLUS_PMIC_COMMON)
 	if ((true ==  wl2868c_test_i2c_enable()) && (ir_core->core_config.vdd_type == IR_EXTERNAL_VDD_TYPE)) {
 		pr_info("oplus_ir_core:wl2868c disable seq type EXT_LDO5");
 		wl2868c_ldo_set_disable(WL2868C_LDO5);
 	} else {
 		pr_info("oplus_ir_core: wl2868c ERROR status\n");
+	}
+#endif
+
+#if defined (CONFIG_OPLUS_SENSOR_IR_USE_WL2866D)
+	if (ir_core->core_config.vdd_type == IR_EXTERNAL_VDD_TYPE && wl2866d_set_ldo_disable_t != NULL) {
+		wl2866d_set_ldo_disable_t(FRONT_AVDD2);
+		pr_info("oplus_ir_core:wl2866d config value %d \n", ir_core->core_config.vdd_max_vol);
+	} else {
+		pr_info("oplus_ir_core:wl2866d error status!\n");
 	}
 #endif
 }
@@ -546,6 +617,15 @@ static int ir_core_probe(struct platform_device *pdev)
 	ir->inf = IR_HW_UNKOWN;
 
 	g_ir = ir;
+#if defined (CONFIG_OPLUS_SENSOR_IR_USE_WL2866D)
+	wl2866d_set_ldo_enable_t = symbol_get(wl2866d_set_ldo_enable);
+	wl2866d_set_ldo_disable_t = symbol_get(wl2866d_set_ldo_disable);
+
+	if (!wl2866d_set_ldo_enable_t || !wl2866d_set_ldo_disable_t) {
+		pr_err("Failed to get wl2866d functions\n");
+	}
+#endif
+
 	mutex_init(&g_ir->tx_mutex);
 	if (parse_hw_core_config(&pdev->dev, g_ir) < 0) {
 		misc_deregister(&ir->misc_dev);
@@ -562,12 +642,27 @@ static int ir_core_remove(struct platform_device *pdev)
 {
 	struct ir_core *ir = platform_get_drvdata(pdev);
 
+	if (ir != NULL && ir->core_config.use_ldo_gpio > 0) {
+		gpio_free(ir->core_config.use_ldo_gpio);
+		pr_err("oplus_ir_core:gpio_free use_ldo_gpio");
+	}
+
 	if (ir) {
 		misc_deregister(&ir->misc_dev);
 		kfree(ir);
 		ir = NULL;
 	}
-
+#if defined (CONFIG_OPLUS_SENSOR_IR_USE_WL2866D)
+	if (wl2866d_set_ldo_enable_t) {
+		symbol_put(wl2866d_set_ldo_enable);
+		wl2866d_set_ldo_enable_t = NULL;
+	}
+	if (wl2866d_set_ldo_disable_t) {
+		symbol_put(wl2866d_set_ldo_disable);
+		wl2866d_set_ldo_disable_t = NULL;
+	}
+#endif
+	pr_info("oplus_ir_core: ir_core_remove call\n");
 	return 0;
 }
 

@@ -106,6 +106,11 @@ static bool is_usersapce_key_process(struct task_struct *t)
 	if (!strcmp(t->comm, "init") && (tcred->uid.val == 0)
 			&& ((t->parent != 0) && !strcmp(t->parent->comm, "init") && (t->parent->pid == 1)))
 		return true;
+#if (!IS_ENABLED(CONFIG_OPLUS_DDK_MTK))
+	if (!strcmp(t->comm, "watchdog") && (!strcmp(t->group_leader->comm, "system_server"))) {
+		return true;
+	}
+#endif
 	return false;
 }
 
